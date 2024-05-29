@@ -10,9 +10,9 @@ This script automates the game [Cookie Clicker](https://orteil.dashnet.org/cooki
 
 ## Setup
 
-1. Install Selenium:
+1. Install Selenium & numpy:
     ```sh
-    pip install selenium
+    pip install selenium, numpy
     ```
 
 2. Download the appropriate version of ChromeDriver from [here](https://sites.google.com/a/chromium.org/chromedriver/downloads) and place it in your PATH.
