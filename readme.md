@@ -7,6 +7,7 @@ This script automates the game [Cookie Clicker](https://orteil.dashnet.org/cooki
 - Python 3.x
 - Selenium
 - ChromeDriver
+- numpy
 
 ## Setup
 
