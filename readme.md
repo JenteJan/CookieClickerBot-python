@@ -16,7 +16,7 @@ This script automates the game [Cookie Clicker](https://orteil.dashnet.org/cooki
     pip install selenium, numpy
     ```
 
-2. Download the appropriate version of ChromeDriver (or any other driver with a small adjustment in the cookiebot.py file) from [here]([https://sites.google.com/a/chromium.org/chromedriver/downloads](https://googlechromelabs.github.io/chrome-for-testing/#stable) and place it in your PATH.
+2. Download the appropriate version of ChromeDriver (or any other driver with a small adjustment in the cookiebot.py file) from [here]([https://sites.google.com/a/chromium.org/chromedriver/downloads) and place it in your PATH.
 
 ## Usage
 
