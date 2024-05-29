@@ -33,7 +33,7 @@ This script automates the game [Cookie Clicker](https://orteil.dashnet.org/cooki
     ```
 ## Why use this Cookie Clicker bot?
 
-I created this bot a while back and thought it publisize it since it turned out quite useful to be able to afk the game and still get golden cookies or even be able to make use of Force of hand when a good golden cookie multiplier occurs.
+I created this bot a while back and thought to publicize it since it turned out quite useful to be able to afk the game and still get golden cookies or even be able to make use of Force of hand when a good golden cookie multiplier occurs.
 
 # Features of the Cookie Clicker Bot
 
