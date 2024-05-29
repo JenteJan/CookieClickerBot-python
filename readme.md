@@ -16,7 +16,7 @@ This script automates the game [Cookie Clicker](https://orteil.dashnet.org/cooki
     pip install selenium, numpy
     ```
 
-2. Download the appropriate version of ChromeDriver from [here](https://sites.google.com/a/chromium.org/chromedriver/downloads) and place it in your PATH.
+2. Download the appropriate version of ChromeDriver (or any other driver with a small adjustment in the cookiebot.py file) from [here]([https://sites.google.com/a/chromium.org/chromedriver/downloads](https://googlechromelabs.github.io/chrome-for-testing/#stable)) and place it in your PATH.
 
 ## Usage
 
@@ -35,6 +35,10 @@ This script automates the game [Cookie Clicker](https://orteil.dashnet.org/cooki
 ## Why use this Cookie Clicker bot?
 
 I created this bot a while back and thought to publicize it since it turned out quite useful to be able to afk the game and still get golden cookies or even be able to make use of Force of hand when a good golden cookie multiplier occurs.
+
+## How to import a save file?
+
+The bot will automatically make use of a file in the same folder called: CookieAISaveData.txt, you can export your old save data to a file and rename it as such to import it or you can change the contents of the file and restart the bot to change the file. It is always recommended to restart the bot when a save file is used or when you prestige so the bot is properly initialized.
 
 # Features of the Cookie Clicker Bot
 
