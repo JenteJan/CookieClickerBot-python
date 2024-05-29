@@ -1,6 +1,6 @@
 # Cookie Clicker Bot
 
-This script automates the game [Cookie Clicker](https://orteil.dashnet.org/cookieclicker/) using Selenium WebDriver. It performs various actions in the game to maximize cookie production.
+This script automates the game [Cookie Clicker](https://orteil.dashnet.org/cookieclicker/) using Selenium WebDriver. It performs various actions in the game to maximize cookie production even when while away.
 
 ## Prerequisites
 
