@@ -64,7 +64,11 @@ class CookieBot:
 
     def setup(self) -> None:
         open_game(self.driver)
-        load_save(self.driver, SAVE_FILE)
+        if self.cfg.fresh:
+            log.info("hard-resetting game state (fresh start)")
+            self.driver.execute_script(scripts.HARD_RESET)
+        else:
+            load_save(self.driver, SAVE_FILE)
         start_auto_intervals(self.driver)
         self._load_upgrade_catalog()
         self.golden_count = int(self.driver.execute_script(
@@ -186,12 +190,15 @@ class CookieBot:
             self.driver.quit()
 
 
-def _parse_args() -> Config:
+def _parse_args() -> tuple[Config, bool]:
     p = argparse.ArgumentParser(description="Cookie Clicker automation bot")
     p.add_argument("--browser", default="firefox", choices=("firefox", "chrome"))
     p.add_argument("--headless", action="store_true")
+    p.add_argument("--fresh", action="store_true", help="Hard-reset the game on launch")
+    p.add_argument("--no-menu", action="store_true", help="Skip the interactive menu")
     args = p.parse_args()
-    return Config(browser=args.browser, headless=args.headless)
+    cfg = Config(browser=args.browser, headless=args.headless, fresh=args.fresh)
+    return cfg, args.no_menu
 
 
 def main() -> None:
@@ -200,7 +207,13 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    cfg = _parse_args()
+    cfg, no_menu = _parse_args()
+    if not no_menu:
+        from cookiebot.menu import show_menu
+        result = show_menu(cfg)
+        if result is None:
+            return
+        cfg = result
     bot = CookieBot(cfg)
     bot.setup()
     bot.run()

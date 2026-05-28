@@ -145,8 +145,9 @@ if (Date.now() - Game.lumpT >= Game.lumpRipeAge) {
 """
 
 BUY_PLEDGE = """
-if (Game.UpgradesById[74].bought == 0) {
-    Game.UpgradesById[74].click(event);
+var pledge = Game.UpgradesById[74];
+if (pledge && pledge.unlocked == 1 && pledge.bought == 0 && Game.cookies >= pledge.basePrice) {
+    pledge.click(event);
 }
 """
 
@@ -205,3 +206,4 @@ for (var i = 0; i < bank.goodsById.length; i++) {
 
 GET_SAVE_DATA = "return Game.WriteSave(1);"
 LOAD_SAVE_DATA = "return Game.LoadSave(arguments[0]);"
+HARD_RESET = "Game.HardReset(2);"
