@@ -213,8 +213,11 @@ class CookieBot:
     def lucky_tick(self) -> None:
         self.driver.execute_script(scripts.GET_LUCKY)
 
-    def news_and_achievements_tick(self) -> None:
-        self.driver.execute_script(scripts.CHECK_NEWS_FEED)
+    def achievement_threshold_tick(self) -> None:
+        # Tap the ticker only when a fortune is showing (free upgrade / GC / cookies).
+        if self.driver.execute_script(scripts.CLICK_TICKER_FORTUNE_IF_PRESENT):
+            log.info("clicked ticker fortune")
+            self._status.update(last_action="clicked ticker fortune")
         targets = self.driver.execute_script(scripts.CALCULATE_ACHIEVEMENT_BUILDINGS) or []
         for name, qty in targets:
             log.info("buy %d × %s (achievement)", qty, name)
@@ -342,7 +345,7 @@ class CookieBot:
     def run(self) -> None:
         self._sched.every(self.cfg.purchase_period_s, self.purchase_tick, "purchase")
         self._sched.every(self.cfg.lucky_period_s, self.lucky_tick, "lucky")
-        self._sched.every(self.cfg.news_period_s, self.news_and_achievements_tick, "news+achievements")
+        self._sched.every(self.cfg.news_period_s, self.achievement_threshold_tick, "achievement-thresholds")
         self._sched.every(self.cfg.minigame_period_s, self.minigame_tick, "minigames")
         self._sched.every(self.cfg.save_period_s, self.save_tick, "save")
         if self.cfg.backup_interval_hours > 0:

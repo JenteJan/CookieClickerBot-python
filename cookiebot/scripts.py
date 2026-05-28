@@ -65,9 +65,19 @@ return total;
 BUY_BUILDING = "Game.Objects[arguments[0]].buy(arguments[1]);"
 BUY_UPGRADE = "Game.UpgradesById[arguments[0]].click(event);"
 
-CHECK_NEWS_FEED = """
-Game.getNewTicker();
-Game.tickerL.click();
+# Click the news ticker iff a clickable fortune is currently showing.
+# Gated on the 'Fortune cookies' heavenly upgrade — without it the game can't
+# spawn fortunes at all (main.js L7858), so polling is wasted otherwise.
+# We deliberately do NOT call Game.getNewTicker() to force extra rolls: a
+# player tapping the ticker triggers a manual reroll that skips the fortune
+# check, so force-rolling here would be doing something the UI can't do.
+CLICK_TICKER_FORTUNE_IF_PRESENT = """
+if (!Game.Has || !Game.Has('Fortune cookies')) return false;
+if (Game.TickerEffect && Game.TickerEffect.type === 'fortune') {
+    Game.tickerL.click();
+    return true;
+}
+return false;
 """
 
 CALCULATE_ACHIEVEMENT_BUILDINGS = """
