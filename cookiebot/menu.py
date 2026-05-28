@@ -6,6 +6,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
+from cookiebot import achievements
 from cookiebot.config import SAVE_FILE, SETTINGS_FILE, Config
 from cookiebot.persistence import backup_save, save_info, save_settings
 
@@ -18,7 +19,7 @@ def show_menu(cfg: Config) -> Config | None:
         _render(cfg)
         choice = Prompt.ask(
             "[bold]Choose[/bold]",
-            choices=["1", "2", "3", "4"],
+            choices=["1", "2", "3", "4", "5"],
             default="1",
             show_choices=False,
         )
@@ -30,6 +31,8 @@ def show_menu(cfg: Config) -> Config | None:
         elif choice == "3":
             _edit_settings(cfg)
         elif choice == "4":
+            _bonus_achievements(cfg)
+        elif choice == "5":
             return None
 
 
@@ -46,12 +49,14 @@ def _render(cfg: Config) -> None:
     table.add_row("Backup interval", _format_interval(cfg.backup_interval_hours))
     table.add_row("Backup retention", _format_retention(cfg.backup_retention_days))
     table.add_row("Lucky reserve", f"{cfg.lucky_reserve_seconds / 60:g} min of CPS")
+    table.add_row("Auto achievements", _format_auto_achievements(cfg))
     _console.print(table)
     _console.print()
     _console.print("  [bold]1[/bold])  Start")
     _console.print("  [bold]2[/bold])  New game (back up save, hard-reset in browser)")
     _console.print("  [bold]3[/bold])  Settings")
-    _console.print("  [bold]4[/bold])  Quit")
+    _console.print("  [bold]4[/bold])  Bonus achievements")
+    _console.print("  [bold]5[/bold])  Quit")
     _console.print()
 
 
@@ -106,3 +111,50 @@ def _format_retention(days: int) -> str:
     if days <= 0:
         return "forever"
     return f"{days} day{'s' if days != 1 else ''}"
+
+
+def _format_auto_achievements(cfg: Config) -> str:
+    parts = []
+    if cfg.auto_fire_safe_achievements:
+        parts.append("safe")
+    if cfg.auto_fire_risky_achievements:
+        parts.append("[red]risky[/red]")
+    return ", ".join(parts) if parts else "[dim]off[/dim]"
+
+
+def _bonus_achievements(cfg: Config) -> None:
+    """Show the achievement catalog and toggle auto-fire flags."""
+    _console.print()
+    _console.print(Panel.fit("Bonus achievements", style="bold yellow"))
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Group", style="dim")
+    table.add_column("Name")
+    table.add_column("Note")
+    for item in achievements.SAFE:
+        table.add_row("safe", item.name, item.note)
+    for item in achievements.RISKY:
+        label = "[red]shadow[/red]" if item.shadow else "[red]risky[/red]"
+        table.add_row(label, item.name, item.note)
+    _console.print(table)
+    _console.print()
+    _console.print(
+        "Safe entries have no in-game cost — visual changes are fine. "
+        "Risky entries have a permanent CPS or save side effect."
+    )
+    _console.print(
+        "Already-unlocked entries are skipped automatically, so "
+        "enabling these is idempotent across launches."
+    )
+    _console.print()
+
+    cfg.auto_fire_safe_achievements = Confirm.ask(
+        "Auto-fire [green]safe[/green] achievements on next start?",
+        default=cfg.auto_fire_safe_achievements,
+    )
+    cfg.auto_fire_risky_achievements = Confirm.ask(
+        "Auto-fire [red]risky[/red] achievements on next start?",
+        default=cfg.auto_fire_risky_achievements,
+    )
+    save_settings(SETTINGS_FILE, cfg)
+    _console.print("  [dim]settings saved[/dim]")

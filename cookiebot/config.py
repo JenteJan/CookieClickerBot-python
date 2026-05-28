@@ -28,6 +28,8 @@ PERSISTABLE_FIELDS = (
     "backup_interval_hours",
     "backup_retention_days",
     "lucky_reserve_seconds",
+    "auto_fire_safe_achievements",
+    "auto_fire_risky_achievements",
 )
 
 
@@ -50,3 +52,7 @@ class Config:
     # 15-min cap. 6000 s = 100 min, the smallest bank that maxes Lucky.
     # 43200 s = 12 h enables full Cookie Chain payouts as well.
     lucky_reserve_seconds: float = 6000.0
+    # One-shot achievement helpers. Safe = no in-game cost. Risky has a
+    # permanent CPS or save side effect — opt in via the menu.
+    auto_fire_safe_achievements: bool = False
+    auto_fire_risky_achievements: bool = False

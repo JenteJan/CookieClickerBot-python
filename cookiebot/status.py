@@ -43,6 +43,7 @@ class BotStatus:
     cookies: float = 0.0
     cookies_ps: float = 0.0
     golden_count: int = 0
+    achievements_owned: int = 0
     paused: bool = False
     pop_wrinklers: bool = False
     last_action: str = "(starting up)"
@@ -75,6 +76,7 @@ def render(status: BotStatus) -> Panel:
     grid.add_row("per second", f"{format_number(status.cookies_ps)} /s")
     grid.add_row("banked", format_duration(banked_s))
     grid.add_row("golden upgrades", f"{status.golden_count}/3")
+    grid.add_row("achievements", f"{status.achievements_owned}")
     grid.add_row("wrinklers", "[red]popping[/]" if status.pop_wrinklers else "holding")
     grid.add_row("last action", status.last_action)
 

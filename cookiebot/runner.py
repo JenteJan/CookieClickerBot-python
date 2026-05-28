@@ -13,7 +13,7 @@ from rich.live import Live
 from rich.logging import RichHandler
 from rich.panel import Panel
 
-from cookiebot import scripts
+from cookiebot import achievements, scripts
 from cookiebot.config import (
     BACKUPS_DIR,
     GOLDEN_COOKIE_UPGRADE_IDS,
@@ -88,6 +88,7 @@ class CookieBot:
         ("p", "pause / resume Python-driven actions"),
         ("s", "save now"),
         ("w", "toggle wrinkler popping (default off)"),
+        ("a", "fire safe one-shot achievements"),
         ("?", "show this help"),
     )
 
@@ -119,7 +120,15 @@ class CookieBot:
         ))
         self._status.update(golden_count=self.golden_count, last_action="setup complete")
         self.driver.execute_script(scripts.SET_PANTHEON)
-        log.info("setup complete; %d golden cookie upgrades owned", self.golden_count)
+        self._refresh_achievement_count()
+        if self.cfg.auto_fire_safe_achievements:
+            self._fire_achievements(achievements.SAFE)
+        if self.cfg.auto_fire_risky_achievements:
+            self._fire_achievements(achievements.RISKY)
+        if self.cfg.auto_fire_safe_achievements or self.cfg.auto_fire_risky_achievements:
+            self._refresh_achievement_count()
+        log.info("setup complete; %d golden cookie upgrades owned, %d achievements",
+                 self.golden_count, self._status.achievements_owned)
 
     def _load_upgrade_catalog(self) -> None:
         raw = self.driver.execute_script(scripts.GET_ALL_UPGRADES)
@@ -224,11 +233,42 @@ class CookieBot:
     def save_tick(self) -> None:
         self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS)
         write_save(self.driver, SAVE_FILE)
+        self._refresh_achievement_count()
 
     def backup_tick(self) -> None:
         path = write_backup(self.driver, BACKUPS_DIR, self.cfg.backup_retention_days)
         if path is not None:
             self._status.update(last_action=f"backup → {path.name}")
+
+    # ---- achievement helpers ----------------------------------------------
+
+    def _refresh_achievement_count(self) -> None:
+        try:
+            count = int(self.driver.execute_script(scripts.ACHIEVEMENTS_OWNED_COUNT) or 0)
+        except Exception:
+            return
+        self._status.update(achievements_owned=count)
+
+    def _fire_achievements(self, items: list[achievements.Achievement]) -> int:
+        """Run each entry whose achievement isn't already unlocked. Returns count fired."""
+        fired = 0
+        for item in items:
+            try:
+                owned = self.driver.execute_script(scripts.ACHIEVEMENT_OWNED, item.name)
+            except Exception:
+                owned = None
+            if owned:
+                continue
+            try:
+                self.driver.execute_script(item.js)
+            except Exception:
+                log.exception("failed to fire '%s'", item.name)
+                continue
+            log.info("fired achievement: %s", item.name)
+            fired += 1
+        if fired:
+            log.info("attempted %d achievement(s)", fired)
+        return fired
 
     # ---- main loop --------------------------------------------------------
 
@@ -241,6 +281,7 @@ class CookieBot:
             "p": self._do_toggle_pause,
             "s": self._do_save_now,
             "w": self._do_toggle_wrinklers,
+            "a": self._do_fire_safe_achievements,
             "?": self._do_print_hotkeys,
             "h": self._do_print_hotkeys,
             "\x03": self._do_quit,  # ctrl-c when cbreak swallows it
@@ -282,6 +323,12 @@ class CookieBot:
             # Make the toggle feel responsive: don't wait for the next minigame tick.
             self.driver.execute_script(scripts.POP_WRINKLERS)
             self._status.update(last_action="popped wrinklers")
+
+    def _do_fire_safe_achievements(self) -> None:
+        fired = self._fire_achievements(achievements.SAFE)
+        if fired:
+            self._status.update(last_action=f"fired {fired} achievement(s)")
+            self._refresh_achievement_count()
 
     def _do_print_hotkeys(self) -> None:
         self._print_hotkey_panel()

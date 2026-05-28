@@ -211,6 +211,14 @@ HARD_RESET = "Game.HardReset(2);"
 # Pops every attached wrinkler that has eaten something. 1.1x return on what
 # they ate (3x for shiny wrinklers). Off by default — popping early forfeits
 # the +0.5%/wrinkler growth bonus from letting them eat.
+ACHIEVEMENTS_OWNED_COUNT = "return Game.AchievementsOwned || 0;"
+
+ACHIEVEMENT_OWNED = """
+var ach = Game.Achievements && Game.Achievements[arguments[0]];
+if (!ach) return null;
+return ach.won == 1;
+"""
+
 POP_WRINKLERS = """
 if (Game.wrinklers) {
     for (var i = 0; i < Game.wrinklers.length; i++) {
