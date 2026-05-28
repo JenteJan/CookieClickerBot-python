@@ -8,8 +8,17 @@ import tempfile
 from pathlib import Path
 
 from cookiebot import scripts
+from cookiebot.config import LEGACY_SAVE_FILE, SAVE_FILE, SAVES_DIR
 
 log = logging.getLogger(__name__)
+
+
+def migrate_legacy_save() -> None:
+    """One-time move of a pre-existing root-level save into ``saves/``."""
+    SAVES_DIR.mkdir(parents=True, exist_ok=True)
+    if LEGACY_SAVE_FILE.exists() and not SAVE_FILE.exists():
+        os.replace(LEGACY_SAVE_FILE, SAVE_FILE)
+        log.info("migrated %s → %s", LEGACY_SAVE_FILE.name, SAVE_FILE.relative_to(SAVES_DIR.parent))
 
 
 def load_save(driver, path: Path) -> bool:

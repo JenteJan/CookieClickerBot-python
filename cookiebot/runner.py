@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import queue
 import time
 from dataclasses import dataclass
 from typing import Callable
+
+from rich.console import Console
+from rich.panel import Panel
 
 from cookiebot import scripts
 from cookiebot.config import (
@@ -21,7 +25,8 @@ from cookiebot.heuristics import (
     parse_upgrade_gain,
     score_upgrade,
 )
-from cookiebot.persistence import load_save, write_save
+from cookiebot.hotkeys import HotkeyListener
+from cookiebot.persistence import load_save, migrate_legacy_save, write_save
 
 log = logging.getLogger("cookiebot")
 
@@ -37,6 +42,7 @@ class _Task:
 class Scheduler:
     def __init__(self) -> None:
         self._tasks: list[_Task] = []
+        self.paused = False
 
     def every(self, period_s: float, fn: Callable[[], None], name: str | None = None) -> None:
         self._tasks.append(_Task(name or fn.__name__, period_s, time.monotonic(), fn))
@@ -46,23 +52,37 @@ class Scheduler:
         next_wake = now + 1.0
         for task in self._tasks:
             if now >= task.next_due:
-                try:
-                    task.fn()
-                except Exception:
-                    log.exception("task %s raised", task.name)
+                if not self.paused:
+                    try:
+                        task.fn()
+                    except Exception:
+                        log.exception("task %s raised", task.name)
                 task.next_due = time.monotonic() + task.period_s
             next_wake = min(next_wake, task.next_due)
         return max(0.0, next_wake - time.monotonic())
 
 
 class CookieBot:
+    HOTKEYS = (
+        ("q", "quit (saves first)"),
+        ("p", "pause / resume Python-driven actions"),
+        ("s", "save now"),
+        ("?", "show this help"),
+    )
+
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.driver = build_driver(cfg)
         self.upgrades_by_id: dict[int, Upgrade] = {}
         self.golden_count: int = 0
+        self._sched = Scheduler()
+        self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
+        self._quit = False
+        self._console = Console()
+        self._hotkeys = HotkeyListener(self._enqueue_key)
 
     def setup(self) -> None:
+        migrate_legacy_save()
         open_game(self.driver)
         if self.cfg.fresh:
             log.info("hard-resetting game state (fresh start)")
@@ -167,22 +187,73 @@ class CookieBot:
 
     # ---- main loop --------------------------------------------------------
 
+    # ---- hotkey plumbing ---------------------------------------------------
+
+    def _enqueue_key(self, key: str) -> None:
+        """Called on the listener thread. Defer the actual work to the main loop."""
+        handler = {
+            "q": self._do_quit,
+            "p": self._do_toggle_pause,
+            "s": self._do_save_now,
+            "?": self._do_print_hotkeys,
+            "h": self._do_print_hotkeys,
+            "\x03": self._do_quit,  # ctrl-c when cbreak swallows it
+        }.get(key)
+        if handler is not None:
+            self._actions.put(handler)
+
+    def _drain_actions(self) -> None:
+        while True:
+            try:
+                action = self._actions.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                action()
+            except Exception:
+                log.exception("hotkey action failed")
+
+    def _do_quit(self) -> None:
+        log.info("quit requested")
+        self._quit = True
+
+    def _do_toggle_pause(self) -> None:
+        self._sched.paused = not self._sched.paused
+        log.info("paused" if self._sched.paused else "resumed")
+
+    def _do_save_now(self) -> None:
+        log.info("manual save")
+        write_save(self.driver, SAVE_FILE)
+
+    def _do_print_hotkeys(self) -> None:
+        self._print_hotkey_panel()
+
+    def _print_hotkey_panel(self) -> None:
+        lines = "\n".join(f"  [bold cyan]{k}[/]  {desc}" for k, desc in self.HOTKEYS)
+        self._console.print(Panel(lines, title="Hotkeys", border_style="cyan", expand=False))
+
+    # ---- main loop --------------------------------------------------------
+
     def run(self) -> None:
-        sched = Scheduler()
-        sched.every(self.cfg.purchase_period_s, self.purchase_tick, "purchase")
-        sched.every(self.cfg.lucky_period_s, self.lucky_tick, "lucky")
-        sched.every(self.cfg.news_period_s, self.news_and_achievements_tick, "news+achievements")
-        sched.every(self.cfg.minigame_period_s, self.minigame_tick, "minigames")
-        sched.every(self.cfg.save_period_s, self.save_tick, "save")
-        log.info("entering main loop; ctrl-c to stop")
+        self._sched.every(self.cfg.purchase_period_s, self.purchase_tick, "purchase")
+        self._sched.every(self.cfg.lucky_period_s, self.lucky_tick, "lucky")
+        self._sched.every(self.cfg.news_period_s, self.news_and_achievements_tick, "news+achievements")
+        self._sched.every(self.cfg.minigame_period_s, self.minigame_tick, "minigames")
+        self._sched.every(self.cfg.save_period_s, self.save_tick, "save")
+        self._print_hotkey_panel()
+        hotkeys_active = self._hotkeys.start()
+        if not hotkeys_active:
+            log.info("hotkeys unavailable (not a TTY); use ctrl-c to stop")
         try:
-            while True:
-                sleep_for = sched.tick()
+            while not self._quit:
+                self._drain_actions()
+                sleep_for = self._sched.tick()
                 if sleep_for > 0:
                     time.sleep(min(sleep_for, 0.25))
         except KeyboardInterrupt:
             log.info("stopping on user request")
         finally:
+            self._hotkeys.stop()
             try:
                 write_save(self.driver, SAVE_FILE)
             except Exception:

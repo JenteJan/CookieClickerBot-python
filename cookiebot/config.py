@@ -3,10 +3,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 GAME_URL = "https://orteil.dashnet.org/cookieclicker/"
-# Save file lives next to the package, not the cwd, so running from anywhere
-# always reads/writes the same file.
+# Saves live in a dedicated gitignored folder next to the package.
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-SAVE_FILE = PROJECT_DIR / "CookieAISaveData.txt"
+SAVES_DIR = PROJECT_DIR / "saves"
+SAVE_FILE = SAVES_DIR / "CookieAISaveData.txt"
+LEGACY_SAVE_FILE = PROJECT_DIR / "CookieAISaveData.txt"
 
 OBJECT_NAMES = [
     "Cursor", "Grandma", "Farm", "Mine", "Factory", "Bank", "Temple",

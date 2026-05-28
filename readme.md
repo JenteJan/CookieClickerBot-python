@@ -37,12 +37,31 @@ python cookieBot.py --fresh            # hard-reset the game on launch
 ```
 
 The default menu lets you continue your save, start a fresh game (backs the
-save up to `CookieAISaveData.txt.bak`), change browser / headless settings,
-or quit. `Ctrl-C` stops the bot and writes a final save.
+save up to `saves/CookieAISaveData.txt.bak`), change browser / headless
+settings, or quit.
+
+### Runtime hotkeys
+
+While the bot is running, single-key shortcuts work without pressing Enter:
+
+| Key | Action                                |
+|-----|---------------------------------------|
+| `q` | Quit (saves first)                    |
+| `p` | Pause / resume Python-driven actions  |
+| `s` | Save now                              |
+| `?` | Re-print this list                    |
+
+Pause only stops the Python-driven purchases, spell casts, and minigame
+ticks. The in-page auto-clicker and golden-cookie popper keep running
+(they're JavaScript intervals). `Ctrl-C` also quits cleanly.
 
 ## Save files
 
-The bot reads and writes `CookieAISaveData.txt` next to `cookieBot.py`. To import an existing save, export it from the game and paste its contents into that file before starting. Restart the bot after editing the save or after prestiging.
+Saves live in `saves/CookieAISaveData.txt` (gitignored). To import an
+existing save, export it from the game and paste its contents into that
+file before starting. Restart the bot after editing the save or after
+prestiging. "New game" in the menu renames the current save to
+`saves/CookieAISaveData.txt.bak` before starting fresh.
 
 ## What it does
 
@@ -64,7 +83,9 @@ cookiebot/
     heuristics.py          # upgrade-description parser + scoring
     persistence.py         # save-file read/write (atomic, backup)
     menu.py                # interactive pre-launch menu
+    hotkeys.py             # runtime keypress listener
     runner.py              # scheduler + main loop
+saves/                     # CookieAISaveData.txt + .bak (gitignored)
 ```
 
 ## Is this cheating?
