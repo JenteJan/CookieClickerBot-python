@@ -49,7 +49,7 @@ return {
 
 GET_ALL_UPGRADES = """
 return Object.values(Game.Upgrades).map(function(u) {
-    return [u.id, u.desc, u.basePrice];
+    return [u.id, u.desc, u.basePrice, u.name];
 });
 """
 
@@ -167,9 +167,9 @@ if (Game.lumps > 1) {
     var order = [7, 6, 2, 5];
     for (var k = 0; k < order.length; k++) {
         var obj = Game.ObjectsById[order[k]];
-        if (obj.level == 0) {
+        if (obj && obj.level == 0) {
             obj.levelUp();
-            if (order[k] == 6) {
+            if (order[k] == 6 && obj.minigame) {
                 try {
                     obj.minigame.slotGod(obj.minigame.godsById[1], 1);
                     obj.minigame.slotGod(obj.minigame.godsById[6], 2);
@@ -207,3 +207,17 @@ for (var i = 0; i < bank.goodsById.length; i++) {
 GET_SAVE_DATA = "return Game.WriteSave(1);"
 LOAD_SAVE_DATA = "return Game.LoadSave(arguments[0]);"
 HARD_RESET = "Game.HardReset(2);"
+
+# Pops every attached wrinkler that has eaten something. 1.1x return on what
+# they ate (3x for shiny wrinklers). Off by default — popping early forfeits
+# the +0.5%/wrinkler growth bonus from letting them eat.
+POP_WRINKLERS = """
+if (Game.wrinklers) {
+    for (var i = 0; i < Game.wrinklers.length; i++) {
+        var w = Game.wrinklers[i];
+        if (w && w.phase == 2 && w.sucked > 0) {
+            w.hp = 0;
+        }
+    }
+}
+"""

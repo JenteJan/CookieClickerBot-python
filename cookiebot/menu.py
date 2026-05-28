@@ -45,6 +45,7 @@ def _render(cfg: Config) -> None:
     table.add_row("Start mode", "[red]fresh game[/red]" if cfg.fresh else "continue save")
     table.add_row("Backup interval", _format_interval(cfg.backup_interval_hours))
     table.add_row("Backup retention", _format_retention(cfg.backup_retention_days))
+    table.add_row("Lucky reserve", f"{cfg.lucky_reserve_seconds / 60:g} min of CPS")
     _console.print(table)
     _console.print()
     _console.print("  [bold]1[/bold])  Start")
@@ -84,6 +85,11 @@ def _edit_settings(cfg: Config) -> None:
         default=cfg.backup_retention_days,
     )
     cfg.backup_retention_days = max(0, retention)
+    reserve_min = FloatPrompt.ask(
+        "Lucky cookie reserve in minutes of CPS (100 = max Lucky, 720 = max Cookie Chain)",
+        default=cfg.lucky_reserve_seconds / 60,
+    )
+    cfg.lucky_reserve_seconds = max(0.0, reserve_min) * 60
     save_settings(SETTINGS_FILE, cfg)
     _console.print("  [dim]settings saved[/dim]")
 

@@ -27,6 +27,7 @@ PERSISTABLE_FIELDS = (
     "headless",
     "backup_interval_hours",
     "backup_retention_days",
+    "lucky_reserve_seconds",
 )
 
 
@@ -44,3 +45,8 @@ class Config:
     # retention of 0 days keeps them forever.
     backup_interval_hours: float = 6.0
     backup_retention_days: int = 7
+    # Cookies held in reserve (CPS × seconds) once all three holding upgrades
+    # (Lucky day / Serendipity / Get lucky) are owned, so Lucky payouts hit the
+    # 15-min cap. 6000 s = 100 min, the smallest bank that maxes Lucky.
+    # 43200 s = 12 h enables full Cookie Chain payouts as well.
+    lucky_reserve_seconds: float = 6000.0

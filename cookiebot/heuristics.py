@@ -24,6 +24,31 @@ class Upgrade(NamedTuple):
     id: int
     gain: UpgradeGain
     base_price: float
+    unlocks_achievement: bool = False
+
+
+# Marginal CPS bonus from a single new achievement. Each achievement adds +4%
+# milk; each kitten upgrade multiplies CPS by (1 + milk × factor) for its own
+# factor. With ~350 achievements and all kittens owned, the sum-of-derivatives
+# works out to ≈ +0.48% of current CPS per new achievement (cookieclicker.wiki.gg/wiki/Milk).
+_ACHIEVEMENT_CPS_FRACTION = 0.0048
+
+
+def is_achievement_unlock_upgrade(name: str) -> bool:
+    """Best-effort name-pattern detection of upgrades whose purchase crosses an
+    achievement threshold the bot's description-parser doesn't see.
+
+    Catches two big categories:
+      - Kitten upgrades ("Kitten helpers", "Kitten workers" …) → Jellicles at 10.
+      - Grandma synergies ("Farmer grandmas", "Cosmic grandmas" …,
+        plus "Antigrandmas" / "Metagrandmas") → Elder (7) / Veteran (14).
+    """
+    n = (name or "").strip().lower()
+    if n.startswith("kitten "):
+        return True
+    if n.endswith("grandmas") and n != "grandmas":
+        return True
+    return False
 
 
 _PCT = re.compile(r"\+(\d+)%")
@@ -95,12 +120,21 @@ def score_upgrade(up: Upgrade, cookies_ps: float, buildings: list[Building]) -> 
         return 0.0
     target = up.gain.target
     if target == "all":
-        return (up.gain.factor * cookies_ps) / up.base_price
-    if target == "clicking":
+        score = (up.gain.factor * cookies_ps) / up.base_price
+    elif target == "clicking":
         # Click upgrades are evaluated as roughly 15 effective clicks/sec.
-        return (cookies_ps * up.gain.factor * 15) / up.base_price
-    needle = target.lower()
-    for b in buildings:
-        if needle in b.name.lower() or needle == "factorie":
-            return (up.gain.factor * b.total_cps) / up.base_price
-    return 0.0
+        score = (cookies_ps * up.gain.factor * 15) / up.base_price
+    else:
+        needle = target.lower()
+        score = 0.0
+        for b in buildings:
+            if needle in b.name.lower() or needle == "factorie":
+                score = (up.gain.factor * b.total_cps) / up.base_price
+                break
+
+    # Achievement-unlock bonus: purchases that tick an Elder/Veteran/Jellicles
+    # threshold add roughly +0.48% of CPS via the milk multiplier — invisible
+    # to the description parser, so add it here.
+    if up.unlocks_achievement:
+        score += (_ACHIEVEMENT_CPS_FRACTION * cookies_ps) / up.base_price
+    return score

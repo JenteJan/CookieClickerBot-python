@@ -26,6 +26,7 @@ from cookiebot.heuristics import (
     Building,
     Upgrade,
     building_from_js,
+    is_achievement_unlock_upgrade,
     parse_upgrade_gain,
     score_upgrade,
 )
@@ -86,6 +87,7 @@ class CookieBot:
         ("q", "quit (saves first)"),
         ("p", "pause / resume Python-driven actions"),
         ("s", "save now"),
+        ("w", "toggle wrinkler popping (default off)"),
         ("?", "show this help"),
     )
 
@@ -97,6 +99,7 @@ class CookieBot:
         self._sched = Scheduler()
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
+        self._pop_wrinklers = False
         self._console = console or Console()
         self._hotkeys = HotkeyListener(self._enqueue_key)
         self._status = BotStatus()
@@ -120,13 +123,18 @@ class CookieBot:
 
     def _load_upgrade_catalog(self) -> None:
         raw = self.driver.execute_script(scripts.GET_ALL_UPGRADES)
-        for uid, desc, base_price in raw:
+        ach = 0
+        for uid, desc, base_price, name in raw:
+            unlocks = is_achievement_unlock_upgrade(name or "")
+            ach += int(unlocks)
             self.upgrades_by_id[int(uid)] = Upgrade(
                 id=int(uid),
                 gain=parse_upgrade_gain(desc or ""),
                 base_price=float(base_price),
+                unlocks_achievement=unlocks,
             )
-        log.info("indexed %d upgrades", len(self.upgrades_by_id))
+        log.info("indexed %d upgrades (%d flagged as achievement-unlocks)",
+                 len(self.upgrades_by_id), ach)
 
     # ---- periodic actions --------------------------------------------------
 
@@ -142,7 +150,9 @@ class CookieBot:
             return
 
         if cookies_ps <= 0:
-            # Game just started — buy the cheapest building we can afford.
+            # Game just started — wait for the best-heuristic building. Clicking
+            # at ~40 c/s reaches 100 c (Grandma) in ~2.5 s, and Grandma's CPS
+            # per cost beats Cursors at that price point.
             best = max(buildings, key=lambda b: b.heuristic)
             if cookies >= best.price:
                 self._buy_building(best)
@@ -162,12 +172,14 @@ class CookieBot:
             self._maybe_buy_building(best_building, cookies, cookies_ps)
 
     def _affordable_with_reserve(self, cookies: float, cookies_ps: float, price: float) -> bool:
-        """Once all 3 golden-cookie upgrades are owned, keep a reserve for spell payouts."""
+        """Once all 3 holding upgrades are owned, keep a reserve so Lucky! payouts hit the cap."""
         if self.golden_count != 3:
             return cookies >= price
-        reserve = cookies_ps * (100 * self.golden_count)
+        reserve = cookies_ps * self.cfg.lucky_reserve_seconds
         if cookies >= reserve + price:
             return True
+        # Trivially cheap purchases (under 1 s of CPS) still go through if we have
+        # at least 50 s of CPS banked — barely dents the reserve target.
         return cookies_ps > price and cookies_ps * 50 < cookies
 
     def _maybe_buy_building(self, b: Building, cookies: float, cookies_ps: float) -> None:
@@ -206,6 +218,8 @@ class CookieBot:
         self.driver.execute_script(scripts.PLANT_CLOVERS)
         self.driver.execute_script(scripts.CHECK_STOCK_MARKET)
         self.driver.execute_script(scripts.SET_PANTHEON)
+        if self._pop_wrinklers:
+            self.driver.execute_script(scripts.POP_WRINKLERS)
 
     def save_tick(self) -> None:
         self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS)
@@ -226,6 +240,7 @@ class CookieBot:
             "q": self._do_quit,
             "p": self._do_toggle_pause,
             "s": self._do_save_now,
+            "w": self._do_toggle_wrinklers,
             "?": self._do_print_hotkeys,
             "h": self._do_print_hotkeys,
             "\x03": self._do_quit,  # ctrl-c when cbreak swallows it
@@ -257,6 +272,16 @@ class CookieBot:
         log.info("manual save")
         write_save(self.driver, SAVE_FILE)
         self._status.update(last_action="manual save")
+
+    def _do_toggle_wrinklers(self) -> None:
+        self._pop_wrinklers = not self._pop_wrinklers
+        self._status.update(pop_wrinklers=self._pop_wrinklers)
+        state = "ON" if self._pop_wrinklers else "OFF"
+        log.info("wrinkler popping %s", state)
+        if self._pop_wrinklers:
+            # Make the toggle feel responsive: don't wait for the next minigame tick.
+            self.driver.execute_script(scripts.POP_WRINKLERS)
+            self._status.update(last_action="popped wrinklers")
 
     def _do_print_hotkeys(self) -> None:
         self._print_hotkey_panel()
