@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from rich.console import Console
+from rich.live import Live
+from rich.logging import RichHandler
 from rich.panel import Panel
 
 from cookiebot import scripts
@@ -27,6 +29,7 @@ from cookiebot.heuristics import (
 )
 from cookiebot.hotkeys import HotkeyListener
 from cookiebot.persistence import load_save, migrate_legacy_save, write_save
+from cookiebot.status import BotStatus, render as render_status
 
 log = logging.getLogger("cookiebot")
 
@@ -70,7 +73,7 @@ class CookieBot:
         ("?", "show this help"),
     )
 
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, console: Console | None = None) -> None:
         self.cfg = cfg
         self.driver = build_driver(cfg)
         self.upgrades_by_id: dict[int, Upgrade] = {}
@@ -78,8 +81,9 @@ class CookieBot:
         self._sched = Scheduler()
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
-        self._console = Console()
+        self._console = console or Console()
         self._hotkeys = HotkeyListener(self._enqueue_key)
+        self._status = BotStatus()
 
     def setup(self) -> None:
         migrate_legacy_save()
@@ -94,6 +98,7 @@ class CookieBot:
         self.golden_count = int(self.driver.execute_script(
             scripts.COUNT_GOLDEN_COOKIE_UPGRADES, GOLDEN_COOKIE_UPGRADE_IDS,
         ))
+        self._status.update(golden_count=self.golden_count, last_action="setup complete")
         self.driver.execute_script(scripts.SET_PANTHEON)
         log.info("setup complete; %d golden cookie upgrades owned", self.golden_count)
 
@@ -113,6 +118,7 @@ class CookieBot:
         snap = self.driver.execute_script(scripts.GAME_SNAPSHOT)
         cookies: float = snap["cookies"]
         cookies_ps: float = snap["cookiesPs"]
+        self._status.update(cookies=cookies, cookies_ps=cookies_ps)
         buildings: list[Building] = [building_from_js(b) for b in snap["buildings"]]
         store_ids: list[int] = [int(i) for i in snap["upgradesInStore"]]
 
@@ -159,10 +165,13 @@ class CookieBot:
             self.driver.execute_script(scripts.BUY_UPGRADE, uid)
             if uid in GOLDEN_COOKIE_UPGRADE_IDS:
                 self.golden_count += 1
+                self._status.update(golden_count=self.golden_count)
+            self._status.update(last_action=f"upgrade #{uid}")
 
     def _buy_building(self, b: Building) -> None:
         log.info("buy building %s @ %.2f", b.name, b.price)
         self.driver.execute_script(scripts.BUY_BUILDING, b.name, 1)
+        self._status.update(last_action=f"buy {b.name}")
 
     def lucky_tick(self) -> None:
         self.driver.execute_script(scripts.GET_LUCKY)
@@ -173,6 +182,7 @@ class CookieBot:
         for name, qty in targets:
             log.info("buy %d × %s (achievement)", qty, name)
             self.driver.execute_script(scripts.BUY_BUILDING, name, qty)
+            self._status.update(last_action=f"buy {qty}× {name}")
 
     def minigame_tick(self) -> None:
         self.driver.execute_script(scripts.FARM_SUGAR_LUMPS)
@@ -219,11 +229,13 @@ class CookieBot:
 
     def _do_toggle_pause(self) -> None:
         self._sched.paused = not self._sched.paused
+        self._status.update(paused=self._sched.paused)
         log.info("paused" if self._sched.paused else "resumed")
 
     def _do_save_now(self) -> None:
         log.info("manual save")
         write_save(self.driver, SAVE_FILE)
+        self._status.update(last_action="manual save")
 
     def _do_print_hotkeys(self) -> None:
         self._print_hotkey_panel()
@@ -240,16 +252,26 @@ class CookieBot:
         self._sched.every(self.cfg.news_period_s, self.news_and_achievements_tick, "news+achievements")
         self._sched.every(self.cfg.minigame_period_s, self.minigame_tick, "minigames")
         self._sched.every(self.cfg.save_period_s, self.save_tick, "save")
-        self._print_hotkey_panel()
         hotkeys_active = self._hotkeys.start()
         if not hotkeys_active:
             log.info("hotkeys unavailable (not a TTY); use ctrl-c to stop")
         try:
-            while not self._quit:
-                self._drain_actions()
-                sleep_for = self._sched.tick()
-                if sleep_for > 0:
-                    time.sleep(min(sleep_for, 0.25))
+            with Live(
+                render_status(self._status),
+                console=self._console,
+                refresh_per_second=4,
+                screen=False,
+            ) as live:
+                last_render = 0.0
+                while not self._quit:
+                    self._drain_actions()
+                    sleep_for = self._sched.tick()
+                    now = time.monotonic()
+                    if now - last_render >= 0.25:
+                        live.update(render_status(self._status))
+                        last_render = now
+                    if sleep_for > 0:
+                        time.sleep(min(sleep_for, 0.1))
         except KeyboardInterrupt:
             log.info("stopping on user request")
         finally:
@@ -273,10 +295,12 @@ def _parse_args() -> tuple[Config, bool]:
 
 
 def main() -> None:
+    console = Console()
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        format="%(message)s",
         datefmt="%H:%M:%S",
+        handlers=[RichHandler(console=console, show_path=False, markup=True, rich_tracebacks=True)],
     )
     cfg, no_menu = _parse_args()
     if not no_menu:
@@ -285,7 +309,7 @@ def main() -> None:
         if result is None:
             return
         cfg = result
-    bot = CookieBot(cfg)
+    bot = CookieBot(cfg, console=console)
     bot.setup()
     bot.run()
 
