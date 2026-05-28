@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
+from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
-from cookiebot.config import SAVE_FILE, Config
-from cookiebot.persistence import backup_save, save_info
+from cookiebot.config import SAVE_FILE, SETTINGS_FILE, Config
+from cookiebot.persistence import backup_save, save_info, save_settings
 
 _console = Console()
 
@@ -43,6 +43,8 @@ def _render(cfg: Config) -> None:
     table.add_row("Browser", cfg.browser)
     table.add_row("Headless", "yes" if cfg.headless else "no")
     table.add_row("Start mode", "[red]fresh game[/red]" if cfg.fresh else "continue save")
+    table.add_row("Backup interval", _format_interval(cfg.backup_interval_hours))
+    table.add_row("Backup retention", _format_retention(cfg.backup_retention_days))
     _console.print(table)
     _console.print()
     _console.print("  [bold]1[/bold])  Start")
@@ -72,3 +74,29 @@ def _edit_settings(cfg: Config) -> None:
         "Browser", choices=["firefox", "chrome"], default=cfg.browser
     )
     cfg.headless = Confirm.ask("Run headless?", default=cfg.headless)
+    interval = FloatPrompt.ask(
+        "Backup every how many hours? (0 = disabled)",
+        default=cfg.backup_interval_hours,
+    )
+    cfg.backup_interval_hours = max(0.0, interval)
+    retention = IntPrompt.ask(
+        "Keep backups for how many days? (0 = keep forever)",
+        default=cfg.backup_retention_days,
+    )
+    cfg.backup_retention_days = max(0, retention)
+    save_settings(SETTINGS_FILE, cfg)
+    _console.print("  [dim]settings saved[/dim]")
+
+
+def _format_interval(hours: float) -> str:
+    if hours <= 0:
+        return "[dim]disabled[/dim]"
+    if hours < 1:
+        return f"every {hours * 60:g} min"
+    return f"every {hours:g} h"
+
+
+def _format_retention(days: int) -> str:
+    if days <= 0:
+        return "forever"
+    return f"{days} day{'s' if days != 1 else ''}"

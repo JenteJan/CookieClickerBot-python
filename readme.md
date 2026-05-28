@@ -63,6 +63,21 @@ file before starting. Restart the bot after editing the save or after
 prestiging. "New game" in the menu renames the current save to
 `saves/CookieAISaveData.txt.bak` before starting fresh.
 
+### Backups
+
+Separate from the main save, the bot writes timestamped snapshots to
+`saves/backups/CookieAISaveData_YYYY-MM-DD_HHMMSS.txt` on an interval you
+control in Settings. Backups older than the retention window are pruned
+automatically. Defaults: every 6 h, kept 7 days. Set the interval to `0`
+to disable, or retention to `0` to keep forever.
+
+### Persistent settings
+
+Your menu choices (browser, headless, backup interval, backup retention)
+are saved to `saves/settings.json` so the next run starts with the same
+configuration. CLI flags (`--browser`, `--headless` / `--no-headless`)
+override the persisted values for that run.
+
 ## What it does
 
 - **Auto-clicks** the big cookie and every shimmer (golden cookies, reindeer, etc.) via in-page JS intervals.

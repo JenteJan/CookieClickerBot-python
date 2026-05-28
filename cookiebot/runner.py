@@ -15,8 +15,10 @@ from rich.panel import Panel
 
 from cookiebot import scripts
 from cookiebot.config import (
+    BACKUPS_DIR,
     GOLDEN_COOKIE_UPGRADE_IDS,
     SAVE_FILE,
+    SETTINGS_FILE,
     Config,
 )
 from cookiebot.driver import build_driver, open_game, start_auto_intervals
@@ -28,7 +30,14 @@ from cookiebot.heuristics import (
     score_upgrade,
 )
 from cookiebot.hotkeys import HotkeyListener
-from cookiebot.persistence import load_save, migrate_legacy_save, write_save
+from cookiebot.persistence import (
+    load_save,
+    load_settings,
+    migrate_legacy_save,
+    save_settings,
+    write_backup,
+    write_save,
+)
 from cookiebot.status import BotStatus, render as render_status
 
 log = logging.getLogger("cookiebot")
@@ -47,8 +56,15 @@ class Scheduler:
         self._tasks: list[_Task] = []
         self.paused = False
 
-    def every(self, period_s: float, fn: Callable[[], None], name: str | None = None) -> None:
-        self._tasks.append(_Task(name or fn.__name__, period_s, time.monotonic(), fn))
+    def every(
+        self,
+        period_s: float,
+        fn: Callable[[], None],
+        name: str | None = None,
+        delay_first: bool = False,
+    ) -> None:
+        first_due = time.monotonic() + (period_s if delay_first else 0.0)
+        self._tasks.append(_Task(name or fn.__name__, period_s, first_due, fn))
 
     def tick(self) -> float:
         now = time.monotonic()
@@ -195,6 +211,11 @@ class CookieBot:
         self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS)
         write_save(self.driver, SAVE_FILE)
 
+    def backup_tick(self) -> None:
+        path = write_backup(self.driver, BACKUPS_DIR, self.cfg.backup_retention_days)
+        if path is not None:
+            self._status.update(last_action=f"backup → {path.name}")
+
     # ---- main loop --------------------------------------------------------
 
     # ---- hotkey plumbing ---------------------------------------------------
@@ -252,6 +273,18 @@ class CookieBot:
         self._sched.every(self.cfg.news_period_s, self.news_and_achievements_tick, "news+achievements")
         self._sched.every(self.cfg.minigame_period_s, self.minigame_tick, "minigames")
         self._sched.every(self.cfg.save_period_s, self.save_tick, "save")
+        if self.cfg.backup_interval_hours > 0:
+            self._sched.every(
+                self.cfg.backup_interval_hours * 3600,
+                self.backup_tick,
+                "backup",
+                delay_first=True,
+            )
+            log.info(
+                "backups every %g h, retain %d days",
+                self.cfg.backup_interval_hours,
+                self.cfg.backup_retention_days,
+            )
         hotkeys_active = self._hotkeys.start()
         if not hotkeys_active:
             log.info("hotkeys unavailable (not a TTY); use ctrl-c to stop")
@@ -285,12 +318,21 @@ class CookieBot:
 
 def _parse_args() -> tuple[Config, bool]:
     p = argparse.ArgumentParser(description="Cookie Clicker automation bot")
-    p.add_argument("--browser", default="firefox", choices=("firefox", "chrome"))
-    p.add_argument("--headless", action="store_true")
+    # ``None`` sentinels let us tell explicit flags apart from defaults so the
+    # persisted settings file remains the source of truth unless overridden.
+    p.add_argument("--browser", default=None, choices=("firefox", "chrome"))
+    p.add_argument("--headless", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--fresh", action="store_true", help="Hard-reset the game on launch")
     p.add_argument("--no-menu", action="store_true", help="Skip the interactive menu")
     args = p.parse_args()
-    cfg = Config(browser=args.browser, headless=args.headless, fresh=args.fresh)
+
+    cfg = Config()
+    load_settings(SETTINGS_FILE, cfg)
+    if args.browser is not None:
+        cfg.browser = args.browser
+    if args.headless is not None:
+        cfg.headless = args.headless
+    cfg.fresh = args.fresh
     return cfg, args.no_menu
 
 
@@ -309,6 +351,7 @@ def main() -> None:
         if result is None:
             return
         cfg = result
+    save_settings(SETTINGS_FILE, cfg)
     bot = CookieBot(cfg, console=console)
     bot.setup()
     bot.run()
