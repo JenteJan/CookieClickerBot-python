@@ -17,6 +17,10 @@ def build_driver(cfg: Config) -> webdriver.Remote:
     browser = cfg.browser.lower()
     if browser == "firefox":
         opts = webdriver.FirefoxOptions()
+        # -no-remote isolates this instance from a Firefox already running
+        # under the user's default profile (otherwise the new process exits
+        # immediately with "Process unexpectedly closed with status 0").
+        opts.add_argument("-no-remote")
         if cfg.headless:
             opts.add_argument("-headless")
         return webdriver.Firefox(options=opts)
