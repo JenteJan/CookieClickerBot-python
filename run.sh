@@ -4,6 +4,7 @@
 #   ./run.sh
 #   ./run.sh --profile experiment --browser chrome
 #   ./run.sh --no-menu --headless
+#   ./run.sh --ab            # synchronized A/B test (two windows, same seed)
 set -euo pipefail
 
 # Resolve the directory this script lives in, so it works from anywhere.
@@ -26,6 +27,12 @@ if [ ! -f "$STAMP" ] || [ requirements.txt -nt "$STAMP" ]; then
     "$PY" -m pip install --quiet --upgrade pip
     "$PY" -m pip install --quiet -r requirements.txt
     touch "$STAMP"
+fi
+
+# `--ab` launches the synchronized A/B test instead of a single bot.
+if [ "${1:-}" = "--ab" ]; then
+    shift
+    exec "$PY" ab_test.py "$@"
 fi
 
 exec "$PY" cookieBot.py "$@"

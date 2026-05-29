@@ -410,3 +410,71 @@ def _bonus_achievements(cfg: Config) -> None:
     )
     save_profile_settings(cfg)
     _console.print(f"  [dim]settings saved for profile '{cfg.save_profile}'[/dim]")
+
+
+def _pick_profile_for_ab(prompt: str, default: str | None) -> str:
+    """Choose (or create) a profile for one side of an A/B test."""
+    profiles = list_profiles()
+    _console.print()
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Profile")
+    table.add_column("Save")
+    for i, name in enumerate(profiles, 1):
+        table.add_row(str(i), name, save_info(profile_save_file(name)))
+    _console.print(table)
+    choices = [str(i) for i in range(1, len(profiles) + 1)] + ["n"]
+    dflt = str(profiles.index(default) + 1) if default in profiles else "1"
+    ans = Prompt.ask(f"{prompt} (number, or n = new)", choices=choices, default=dflt, show_choices=False)
+    if ans == "n":
+        raw = Prompt.ask("New profile name")
+        name = sanitize_profile(raw)
+        if not profile_exists(name):
+            create_profile(name)
+        return name
+    return profiles[int(ans) - 1]
+
+
+def show_ab_menu() -> tuple[Config, Config] | None:
+    """Pre-launch picker for a synchronized A/B test. Returns two ready Configs
+    (A, B), each with its own profile settings loaded and a shared seed, or None
+    to cancel."""
+    _console.print()
+    _console.print(Panel.fit("A/B test — synchronized, same seed", style="bold yellow"))
+    if not list_profiles():
+        create_profile(DEFAULT_PROFILE)
+
+    name_a = _pick_profile_for_ab("Profile A", DEFAULT_PROFILE)
+    name_b = _pick_profile_for_ab("Profile B", None)
+    if name_a == name_b:
+        _console.print("[red]A and B must be different profiles (they'd fight over one save).[/red]")
+        return None
+
+    seed = Prompt.ask("Shared RNG seed (same for both → identical luck)", default="ab-trial")
+
+    def build(name: str) -> Config:
+        cfg = Config()
+        cfg.save_profile = name
+        load_profile_settings(cfg)
+        cfg.ab_seed = seed
+        cfg.ab_log = True
+        cfg.headless = False  # the whole point is to watch them
+        return cfg
+
+    cfg_a, cfg_b = build(name_a), build(name_b)
+
+    # Optionally tweak each side's strategy settings before launch.
+    if Confirm.ask(f"Edit settings for A ('{name_a}')?", default=False):
+        _edit_settings(cfg_a)
+    if Confirm.ask(f"Edit settings for B ('{name_b}')?", default=False):
+        _edit_settings(cfg_b)
+
+    _console.print()
+    _console.print(f"A = [green]{name_a}[/green]  payback={cfg_a.payback_mode}  "
+                   f"reserve={cfg_a.lucky_reserve_seconds / 60:g}m")
+    _console.print(f"B = [green]{name_b}[/green]  payback={cfg_b.payback_mode}  "
+                   f"reserve={cfg_b.lucky_reserve_seconds / 60:g}m")
+    _console.print(f"seed = [cyan]{seed}[/cyan]   (logs → each profile's trials/ folder)")
+    if not Confirm.ask("Launch both now?", default=True):
+        return None
+    return cfg_a, cfg_b

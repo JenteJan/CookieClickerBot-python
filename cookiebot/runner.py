@@ -119,7 +119,10 @@ class CookieBot:
         self._hotkeys = HotkeyListener(self._enqueue_key)
         self._status = BotStatus()
 
-    def setup(self) -> None:
+    def setup(self, start_intervals: bool = True) -> None:
+        """Prepare the bot. With ``start_intervals=False`` the auto-clicker is
+        NOT started — the A/B orchestrator uses this to load both games fully
+        and then start them at the same instant via ``begin_play()``."""
         migrate_legacy_save()
         log.info("using save profile %r (%s)", self.cfg.save_profile, self.save_file.name)
         open_game(self.driver, seed=self.cfg.ab_seed)
@@ -131,7 +134,8 @@ class CookieBot:
             self.driver.execute_script(scripts.HARD_RESET)
         else:
             load_save(self.driver, self.save_file)
-        start_auto_intervals(self.driver)
+        if start_intervals:
+            start_auto_intervals(self.driver)
         self._load_upgrade_catalog()
         self.golden_count = int(self.driver.execute_script(
             scripts.COUNT_GOLDEN_COOKIE_UPGRADES, GOLDEN_COOKIE_UPGRADE_NAMES,
@@ -578,7 +582,13 @@ class CookieBot:
 
     # ---- main loop --------------------------------------------------------
 
-    def run(self) -> None:
+    def begin_play(self) -> None:
+        """Start the in-page auto-clicker. Called by the A/B orchestrator to
+        kick off both runs at the same instant after both have loaded."""
+        start_auto_intervals(self.driver)
+
+    def _schedule(self) -> None:
+        """Register all periodic tasks on the scheduler."""
         self._sched.every(self.cfg.purchase_period_s, self.purchase_tick, "purchase")
         self._sched.every(self.cfg.lucky_period_s, self.lucky_tick, "lucky")
         self._sched.every(self.cfg.news_period_s, self.achievement_threshold_tick, "achievement-thresholds")
@@ -587,30 +597,44 @@ class CookieBot:
         if self._trial is not None:
             self._sched.every(self.cfg.ab_snapshot_period_s, self.trial_snapshot_tick, "trial-log")
         if self.cfg.payback_mode:
-            # Prime the cache immediately so the first purchases use real
-            # marginals, then refresh on its own cadence.
-            self.marginals_tick()
+            self.marginals_tick()  # prime the cache
             self._sched.every(self.cfg.marginals_period_s, self.marginals_tick, "marginals")
             log.info("payback mode on (true marginal-CPS upgrade scoring)")
         if self.cfg.backup_interval_hours > 0:
-            self._sched.every(
-                self.cfg.backup_interval_hours * 3600,
-                self.backup_tick,
-                "backup",
-                delay_first=True,
-            )
-            log.info(
-                "backups every %g h, retain %d days",
-                self.cfg.backup_interval_hours,
-                self.cfg.backup_retention_days,
-            )
+            self._sched.every(self.cfg.backup_interval_hours * 3600, self.backup_tick,
+                              "backup", delay_first=True)
         if self.cfg.auto_ascend:
             self._sched.every(self.cfg.ascend_period_s, self.ascend_tick, "ascend", delay_first=True)
-            log.info("auto-ascend on (≥%.0f%% prestige gain)", self.cfg.auto_ascend_gain_pct)
         if self.cfg.auto_train_dragon:
             self._sched.every(self.cfg.dragon_period_s, self.dragon_tick, "dragon", delay_first=True)
-            log.info("auto-train dragon on (keep ≥%d of any sacrificed building)",
-                     self.cfg.dragon_keep_buildings)
+
+    def tick_once(self) -> float:
+        """Run one drain+schedule pass; returns seconds the caller may sleep.
+        Lets an external loop (the A/B orchestrator) drive multiple bots."""
+        self._drain_actions()
+        return self._sched.tick()
+
+    @property
+    def status(self) -> BotStatus:
+        return self._status
+
+    @property
+    def quit_requested(self) -> bool:
+        return self._quit
+
+    def shutdown(self) -> None:
+        if self._trial is not None:
+            self._trial.close()
+            self._trial = None
+        try:
+            write_save(self.driver, self.save_file)
+        except Exception:
+            log.exception("final save failed")
+        self.driver.quit()
+
+    def run(self) -> None:
+        """Single-bot main loop: schedule, own the dashboard + hotkeys, tick."""
+        self._schedule()
         hotkeys_active = self._hotkeys.start()
         if not hotkeys_active:
             log.info("hotkeys unavailable (not a TTY); use ctrl-c to stop")
@@ -623,8 +647,7 @@ class CookieBot:
             ) as live:
                 last_render = 0.0
                 while not self._quit:
-                    self._drain_actions()
-                    sleep_for = self._sched.tick()
+                    sleep_for = self.tick_once()
                     now = time.monotonic()
                     if now - last_render >= 0.25:
                         live.update(render_status(self._status))
@@ -635,13 +658,7 @@ class CookieBot:
             log.info("stopping on user request")
         finally:
             self._hotkeys.stop()
-            if self._trial is not None:
-                self._trial.close()
-            try:
-                write_save(self.driver, self.save_file)
-            except Exception:
-                log.exception("final save failed")
-            self.driver.quit()
+            self.shutdown()
 
 
 def _parse_args() -> tuple[Config, bool]:
