@@ -236,7 +236,8 @@ var levels = Game.dragonLevels;
 var lvl = Game.dragonLevel;
 if (!levels || lvl >= levels.length - 1) return {maxed: true, level: lvl};
 var me = levels[lvl];
-if (!me.cost()) return {waiting: true, level: lvl, name: me.name};
+// cost() returns a cookie amount; only proceed when we can actually afford it.
+if (Game.cookies < me.cost()) return {waiting: true, level: lvl, name: me.name};
 var buyStr = me.buy.toString();
 if (buyStr.indexOf('sacrifice') >= 0) {
     var m = buyStr.match(/Objects\\['([^']+)'\\]\\.sacrifice\\((\\d+)\\)/);
@@ -247,8 +248,10 @@ if (buyStr.indexOf('sacrifice') >= 0) {
         }
     }
 }
-Game.UpgradeDragon();
-return {trained: true, level: Game.dragonLevel, name: me.name};
+Game.UpgradeDragon();  // calls me.buy(true): sacrifices (if any) and increments level
+// Confirm the level actually advanced before reporting success.
+if (Game.dragonLevel > lvl) return {trained: true, level: Game.dragonLevel, name: me.name};
+return {waiting: true, level: lvl, name: me.name};
 """
 
 ASCEND_INFO = """
