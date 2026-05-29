@@ -13,20 +13,37 @@ Automates [Cookie Clicker](https://orteil.dashnet.org/cookieclicker/) with Selen
 ```sh
 git clone <repository_url>
 cd CookieClickerBot-python
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
 ```
 
-Then install **one** browser driver:
+Install **one** browser driver:
 
 | Browser | Driver        | macOS install                       |
 |---------|---------------|-------------------------------------|
 | Firefox | `geckodriver` | `brew install geckodriver`          |
 | Chrome  | `chromedriver`| `brew install --cask chromedriver`  |
 
+The Python virtualenv and dependencies are set up automatically by `run.sh`
+on first launch. To do it manually instead:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
 ## Run
+
+The easiest way — `run.sh` creates the venv, installs deps (only when
+`requirements.txt` changes), and launches the bot. Works from any directory
+and passes arguments through:
+
+```sh
+./run.sh                       # opens the interactive menu
+./run.sh --no-menu --headless  # skip menu, no window
+./run.sh --profile experiment  # use a named save profile
+```
+
+Or call the module directly if you manage the venv yourself:
 
 ```sh
 python cookieBot.py                    # opens the interactive menu
@@ -34,6 +51,7 @@ python cookieBot.py --no-menu          # skip the menu, use CLI flags only
 python cookieBot.py --browser chrome   # Chrome
 python cookieBot.py --headless         # no window
 python cookieBot.py --fresh            # hard-reset the game on launch
+python cookieBot.py --profile <name>   # select a named save profile
 ```
 
 The default menu lets you continue your save, start a fresh game (backs the
