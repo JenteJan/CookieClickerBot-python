@@ -87,7 +87,7 @@ class CookieBot:
         ("q", "quit (saves first)"),
         ("p", "pause / resume Python-driven actions"),
         ("s", "save now"),
-        ("w", "toggle wrinkler popping (default off)"),
+        ("w", "pop all wrinklers now"),
         ("a", "fire safe one-shot achievements"),
         ("?", "show this help"),
     )
@@ -100,7 +100,6 @@ class CookieBot:
         self._sched = Scheduler()
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
-        self._pop_wrinklers = False
         self._console = console or Console()
         self._hotkeys = HotkeyListener(self._enqueue_key)
         self._status = BotStatus()
@@ -118,7 +117,11 @@ class CookieBot:
         self.golden_count = int(self.driver.execute_script(
             scripts.COUNT_GOLDEN_COOKIE_UPGRADES, GOLDEN_COOKIE_UPGRADE_IDS,
         ))
-        self._status.update(golden_count=self.golden_count, last_action="setup complete")
+        self._status.update(
+            golden_count=self.golden_count,
+            wrinkler_auto_frenzy=self.cfg.auto_pop_wrinklers_in_frenzy,
+            last_action="setup complete",
+        )
         self.driver.execute_script(scripts.SET_PANTHEON)
         self._refresh_achievement_count()
         if self.cfg.auto_fire_safe_achievements:
@@ -313,7 +316,7 @@ class CookieBot:
             "q": self._do_quit,
             "p": self._do_toggle_pause,
             "s": self._do_save_now,
-            "w": self._do_toggle_wrinklers,
+            "w": self._do_pop_wrinklers_now,
             "a": self._do_fire_safe_achievements,
             "?": self._do_print_hotkeys,
             "h": self._do_print_hotkeys,
@@ -347,15 +350,10 @@ class CookieBot:
         write_save(self.driver, SAVE_FILE)
         self._status.update(last_action="manual save")
 
-    def _do_toggle_wrinklers(self) -> None:
-        self._pop_wrinklers = not self._pop_wrinklers
-        self._status.update(pop_wrinklers=self._pop_wrinklers)
-        state = "ON" if self._pop_wrinklers else "OFF"
-        log.info("wrinkler popping %s", state)
-        if self._pop_wrinklers:
-            # Make the toggle feel responsive: don't wait for the next minigame tick.
-            self.driver.execute_script(scripts.POP_WRINKLERS)
-            self._status.update(last_action="popped wrinklers")
+    def _do_pop_wrinklers_now(self) -> None:
+        log.info("popping all wrinklers")
+        self.driver.execute_script(scripts.POP_WRINKLERS)
+        self._status.update(last_action="popped wrinklers")
 
     def _do_fire_safe_achievements(self) -> None:
         fired = self._fire_achievements(achievements.SAFE)

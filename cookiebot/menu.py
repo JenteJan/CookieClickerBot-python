@@ -95,6 +95,10 @@ def _edit_settings(cfg: Config) -> None:
         default=cfg.lucky_reserve_seconds / 60,
     )
     cfg.lucky_reserve_seconds = max(0.0, reserve_min) * 60
+    cfg.auto_pop_wrinklers_in_frenzy = Confirm.ask(
+        "Auto-pop wrinklers during Frenzy? (otherwise hold; 'w' pops manually)",
+        default=cfg.auto_pop_wrinklers_in_frenzy,
+    )
     save_settings(SETTINGS_FILE, cfg)
     _console.print("  [dim]settings saved[/dim]")
 

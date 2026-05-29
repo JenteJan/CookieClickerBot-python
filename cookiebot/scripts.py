@@ -249,3 +249,21 @@ if (Game.wrinklers) {
     }
 }
 """
+
+# Pop wrinklers only while a CpS-multiplying buff (Frenzy, Elder Frenzy, etc.)
+# is active. Detected via multCpS > 1 rather than buff names, so it covers any
+# present or future multiplier buff. Returns true if anything was popped.
+POP_WRINKLERS_IF_FRENZY = """
+var frenzy = false;
+for (var name in Game.buffs) {
+    var b = Game.buffs[name];
+    if (b && b.multCpS && b.multCpS > 1) { frenzy = true; break; }
+}
+if (!frenzy || !Game.wrinklers) return false;
+var popped = false;
+for (var i = 0; i < Game.wrinklers.length; i++) {
+    var w = Game.wrinklers[i];
+    if (w && w.phase == 2 && w.sucked > 0) { w.hp = 0; popped = true; }
+}
+return popped;
+"""

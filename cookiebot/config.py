@@ -30,6 +30,7 @@ PERSISTABLE_FIELDS = (
     "lucky_reserve_seconds",
     "auto_fire_safe_achievements",
     "auto_fire_risky_achievements",
+    "auto_pop_wrinklers_in_frenzy",
 )
 
 
@@ -59,3 +60,7 @@ class Config:
     # you'd rather earn them organically.
     auto_fire_safe_achievements: bool = True
     auto_fire_risky_achievements: bool = True
+    # Hold wrinklers (they accumulate eaten cookies) and pop them only while a
+    # CpS-multiplying buff like Frenzy is active, capturing the inflated payout.
+    # The 'w' hotkey always pops on demand regardless of this setting.
+    auto_pop_wrinklers_in_frenzy: bool = False

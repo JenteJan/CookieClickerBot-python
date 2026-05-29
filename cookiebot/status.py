@@ -46,7 +46,8 @@ class BotStatus:
     golden_count: int = 0
     achievements_owned: int = 0
     paused: bool = False
-    pop_wrinklers: bool = False
+    # True = auto-pop wrinklers during Frenzy; False = hold (manual 'w' to pop).
+    wrinkler_auto_frenzy: bool = False
     last_action: str = "(starting up)"
     # Top heuristic candidates: (label, score, affordable_now)
     next_buys: List[Tuple[str, float, bool]] = field(default_factory=list)
@@ -115,7 +116,7 @@ def render(status: BotStatus) -> Panel:
     grid.add_row("target bank", _format_reserve_target(status))
     grid.add_row("golden upgrades", f"{status.golden_count}/3")
     grid.add_row("achievements", f"{status.achievements_owned}")
-    grid.add_row("wrinklers", "[red]popping[/]" if status.pop_wrinklers else "holding")
+    grid.add_row("wrinklers", "auto-pop (frenzy)" if status.wrinkler_auto_frenzy else "holding")
     grid.add_row("last action", status.last_action)
     grid.add_row("next buys", _format_next_buys(status.next_buys))
 
