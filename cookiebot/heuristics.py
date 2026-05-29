@@ -34,6 +34,29 @@ class Upgrade(NamedTuple):
 # works out to ≈ +0.48% of current CPS per new achievement (cookieclicker.wiki.gg/wiki/Milk).
 _ACHIEVEMENT_CPS_FRACTION = 0.0048
 
+# Building counts that grant an achievement when reached (per building type).
+_ACHIEVEMENT_BUILDING_THRESHOLDS = frozenset(
+    [1, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 800]
+)
+
+
+def building_buy_crosses_achievement(amount: int, qty: int = 1) -> bool:
+    """True if buying ``qty`` more of a building at count ``amount`` crosses a
+    building-count achievement threshold."""
+    return any(amount < t <= amount + qty for t in _ACHIEVEMENT_BUILDING_THRESHOLDS)
+
+
+def achievement_milk_bonus_cps(cookies_ps: float) -> float:
+    """Marginal CPS gained from the milk bump of crossing one achievement."""
+    return _ACHIEVEMENT_CPS_FRACTION * cookies_ps
+
+
+def payback_seconds(price: float, delta_cps: float) -> float:
+    """Seconds for a purchase to pay for itself. inf when it adds no CPS."""
+    if delta_cps <= 0:
+        return float("inf")
+    return price / delta_cps
+
 
 def is_achievement_unlock_upgrade(name: str) -> bool:
     """Best-effort name-pattern detection of upgrades whose purchase crosses an

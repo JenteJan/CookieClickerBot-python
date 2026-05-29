@@ -31,6 +31,8 @@ PERSISTABLE_FIELDS = (
     "auto_fire_safe_achievements",
     "auto_fire_risky_achievements",
     "auto_pop_wrinklers_in_frenzy",
+    "payback_mode",
+    "payback_cap_minutes",
 )
 
 
@@ -64,3 +66,10 @@ class Config:
     # CpS-multiplying buff like Frenzy is active, capturing the inflated payout.
     # The 'w' hotkey always pops on demand regardless of this setting.
     auto_pop_wrinklers_in_frenzy: bool = False
+    # Experimental payback-time purchase mode (guide §18.3). vs the default
+    # value/cost heuristic it adds: (1) the achievement-milk bonus to building
+    # buys that cross a count threshold (the default mode only credits upgrades),
+    # and (2) an optional payback ceiling — skip purchases slower to pay off than
+    # payback_cap_minutes (0 = no cap). Off by default for easy A/B comparison.
+    payback_mode: bool = False
+    payback_cap_minutes: float = 0.0

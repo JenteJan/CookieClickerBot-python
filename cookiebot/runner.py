@@ -25,6 +25,8 @@ from cookiebot.driver import build_driver, open_game, start_auto_intervals
 from cookiebot.heuristics import (
     Building,
     Upgrade,
+    achievement_milk_bonus_cps,
+    building_buy_crosses_achievement,
     building_from_js,
     is_achievement_unlock_upgrade,
     parse_upgrade_gain,
@@ -178,7 +180,19 @@ class CookieBot:
                 self._buy_building(best)
             return
 
-        best_building = max(buildings, key=lambda b: b.heuristic)
+        # Building score is value-per-cost (= 1/payback). In payback mode, credit
+        # the achievement-milk bonus to buys that cross a count threshold.
+        def building_score(b: Building) -> float:
+            score = b.heuristic
+            if (
+                self.cfg.payback_mode
+                and b.price > 0
+                and building_buy_crosses_achievement(b.amount)
+            ):
+                score += achievement_milk_bonus_cps(cookies_ps) / b.price
+            return score
+
+        best_building = max(buildings, key=building_score)
         scored_upgrades = [
             (uid, score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings, store_prices[uid]))
             for uid in store_prices
@@ -188,9 +202,16 @@ class CookieBot:
 
         self._update_next_buys(cookies, buildings, scored_upgrades, store_prices)
 
-        if best_upgrade[1] > best_building.heuristic and best_upgrade[0] is not None:
-            self._maybe_buy_upgrade(best_upgrade[0], cookies, cookies_ps, store_prices[best_upgrade[0]])
-        else:
+        # Optional payback ceiling: skip anything slower to pay off than the cap.
+        # score is value-per-cost, so the minimum acceptable score is 1/cap_seconds.
+        min_score = 0.0
+        if self.cfg.payback_mode and self.cfg.payback_cap_minutes > 0:
+            min_score = 1.0 / (self.cfg.payback_cap_minutes * 60)
+
+        if best_upgrade[1] > building_score(best_building) and best_upgrade[0] is not None:
+            if best_upgrade[1] >= min_score:
+                self._maybe_buy_upgrade(best_upgrade[0], cookies, cookies_ps, store_prices[best_upgrade[0]])
+        elif building_score(best_building) >= min_score:
             self._maybe_buy_building(best_building, cookies, cookies_ps)
 
     def _update_next_buys(

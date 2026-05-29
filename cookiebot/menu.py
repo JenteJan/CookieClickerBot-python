@@ -99,6 +99,16 @@ def _edit_settings(cfg: Config) -> None:
         "Auto-pop wrinklers during Frenzy? (otherwise hold; 'w' pops manually)",
         default=cfg.auto_pop_wrinklers_in_frenzy,
     )
+    cfg.payback_mode = Confirm.ask(
+        "Use experimental payback-time purchase mode?",
+        default=cfg.payback_mode,
+    )
+    if cfg.payback_mode:
+        cap = FloatPrompt.ask(
+            "Skip purchases slower to pay off than how many minutes? (0 = no cap)",
+            default=cfg.payback_cap_minutes,
+        )
+        cfg.payback_cap_minutes = max(0.0, cap)
     save_settings(SETTINGS_FILE, cfg)
     _console.print("  [dim]settings saved[/dim]")
 
