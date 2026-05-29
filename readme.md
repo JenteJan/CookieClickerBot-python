@@ -93,6 +93,14 @@ python cookieBot.py --profile aggressive --no-menu
 python cookieBot.py --profile conservative --browser chrome --no-menu
 ```
 
+Each profile can only be run by one instance at a time — a lock file
+(`saves/profiles/<name>.lock` holding the owning PID) prevents two instances
+from writing the same save and clobbering each other. If you launch a second
+instance on a profile that's already running, the menu offers to **branch** it
+(copy the in-progress save into a new slot so you can A/B test from the same
+point) or pick another free profile; with `--no-menu` it explains and exits.
+Locks from crashed processes are detected and cleared automatically.
+
 "New game" archives the current profile's save to
 `saves/archives/<profile>_<timestamp>.txt` before resetting, and the Save
 profiles screen can restore any archive.

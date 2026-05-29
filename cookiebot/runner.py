@@ -33,6 +33,7 @@ from cookiebot.heuristics import (
     score_upgrade,
 )
 from cookiebot.hotkeys import HotkeyListener
+from cookiebot.locks import ProfileInUseError, ProfileLock
 from cookiebot.persistence import (
     load_save,
     load_settings,
@@ -523,9 +524,40 @@ def main() -> None:
             return
         cfg = result
     save_settings(SETTINGS_FILE, cfg)
-    bot = CookieBot(cfg, console=console)
-    bot.setup()
-    bot.run()
+
+    # Acquire an exclusive lock on the chosen profile so two instances never
+    # write the same save. On conflict, resolve interactively (branch to a new
+    # slot or pick another) or, with --no-menu, explain and exit.
+    lock = _acquire_profile_lock(cfg, console, interactive=not no_menu)
+    if lock is None:
+        return
+    save_settings(SETTINGS_FILE, cfg)
+    try:
+        bot = CookieBot(cfg, console=console)
+        bot.setup()
+        bot.run()
+    finally:
+        lock.release()
+
+
+def _acquire_profile_lock(cfg: Config, console: Console, interactive: bool):
+    """Return a held ProfileLock for cfg.save_profile, or None to abort."""
+    while True:
+        lock = ProfileLock(cfg.save_profile)
+        try:
+            lock.acquire()
+            return lock
+        except ProfileInUseError as e:
+            if not interactive:
+                console.print(
+                    f"[red]Profile '{e.profile}' is already running (pid {e.pid}).[/red]\n"
+                    f"Pass [bold]--profile <other>[/bold] to run a second instance."
+                )
+                return None
+            from cookiebot.menu import resolve_locked_profile
+            if not resolve_locked_profile(cfg, e.pid):
+                return None  # user cancelled
+            # cfg.save_profile was updated; loop and try to lock the new choice.
 
 
 if __name__ == "__main__":

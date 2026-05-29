@@ -14,6 +14,7 @@ from cookiebot.config import (
     profile_save_file,
     sanitize_profile,
 )
+from cookiebot.locks import is_locked, lock_owner
 from cookiebot.persistence import (
     archive_profile,
     create_profile,
@@ -188,10 +189,13 @@ def _save_profiles(cfg: Config) -> None:
         table.add_column("#", style="dim", justify="right")
         table.add_column("Profile")
         table.add_column("Save")
+        table.add_column("Status")
         profiles = list_profiles()
         for i, name in enumerate(profiles, 1):
             active = " [green](active)[/green]" if name == cfg.save_profile else ""
-            table.add_row(str(i), name + active, save_info(profile_save_file(name)))
+            owner = lock_owner(name)
+            status = f"[yellow]running (pid {owner})[/yellow]" if owner else "[dim]free[/dim]"
+            table.add_row(str(i), name + active, save_info(profile_save_file(name)), status)
         _console.print(table)
         _console.print()
         _console.print("  [bold]s[/bold]) switch   [bold]n[/bold]) new   "
@@ -255,6 +259,48 @@ def _restore_archive(cfg: Config) -> None:
     ):
         restore_archive(chosen, cfg.save_profile)
         _console.print(f"  restored [green]{chosen.name}[/green]")
+
+
+def resolve_locked_profile(cfg: Config, pid: int) -> bool:
+    """Called when cfg.save_profile is already running. Let the user branch the
+    in-progress save into a new slot (so both can run / be A/B-compared) or pick
+    another profile. Updates cfg.save_profile and returns True when resolved to a
+    new choice; returns False to cancel the launch."""
+    _console.print()
+    _console.print(Panel.fit(
+        f"Profile '{cfg.save_profile}' is already running (pid {pid})",
+        style="bold yellow",
+    ))
+    _console.print(
+        "  [bold]branch[/bold]) copy this save to a new slot and run that "
+        "(A/B test from the same point)\n"
+        "  [bold]pick[/bold])   choose a different profile\n"
+        "  [bold]cancel[/bold]) don't launch"
+    )
+    action = Prompt.ask("Choose", choices=["branch", "pick", "cancel"], default="branch")
+    if action == "cancel":
+        return False
+    if action == "branch":
+        source = cfg.save_profile
+        raw = Prompt.ask("Name for the branched profile", default=f"{source}-2")
+        name = sanitize_profile(raw)
+        if profile_exists(name):
+            _console.print(f"  [red]'{name}' already exists; pick another name[/red]")
+            return resolve_locked_profile(cfg, pid)
+        create_profile(name, copy_from=source)
+        cfg.save_profile = name
+        save_settings(SETTINGS_FILE, cfg)
+        _console.print(f"  branched [green]{source}[/green] → [green]{name}[/green]")
+        return True
+    # pick another existing profile
+    free = [p for p in list_profiles() if not is_locked(p)]
+    if not free:
+        _console.print("  [dim]no free profiles; branch or create one instead[/dim]")
+        return resolve_locked_profile(cfg, pid)
+    name = Prompt.ask("Switch to which free profile?", choices=free, default=free[0])
+    cfg.save_profile = name
+    save_settings(SETTINGS_FILE, cfg)
+    return True
 
 
 def _delete_profile(cfg: Config, profiles: list[str]) -> None:
