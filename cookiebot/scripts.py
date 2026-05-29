@@ -49,7 +49,9 @@ return {
 
 GET_ALL_UPGRADES = """
 return Object.values(Game.Upgrades).map(function(u) {
-    return [u.id, u.desc, u.basePrice, u.name];
+    // dname is the human-facing display name (localized); name is the internal
+    // key. Prefer dname so the UI never shows an internal id.
+    return [u.id, u.desc, u.basePrice, u.dname || u.name];
 });
 """
 

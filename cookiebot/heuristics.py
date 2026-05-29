@@ -25,6 +25,7 @@ class Upgrade(NamedTuple):
     gain: UpgradeGain
     base_price: float
     unlocks_achievement: bool = False
+    name: str = ""
 
 
 # Marginal CPS bonus from a single new achievement. Each achievement adds +4%
@@ -99,7 +100,12 @@ def parse_upgrade_gain(description: str) -> UpgradeGain:
     if "milk" in description:
         return UpgradeGain(0.25, "all")
 
-    if "Golden cookies" in description:
+    # Golden-cookie upgrades (frequency / duration / effect). Match singular and
+    # plural, any case: "Get lucky" reads "Golden cookie effects last twice as
+    # long" (singular), which the old plural-only "Golden cookies" check missed —
+    # leaving one of the strongest upgrades scored at the 0.05 fallback so it
+    # never out-ranked cheap buildings.
+    if "golden cookie" in description.lower():
         return UpgradeGain(2.0, "all")
 
     m = _BUILDING_EFF.search(description)

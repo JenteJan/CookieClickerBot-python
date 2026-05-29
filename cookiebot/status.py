@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import List, Tuple
 
 from rich.console import Group
 from rich.panel import Panel
@@ -47,6 +48,8 @@ class BotStatus:
     paused: bool = False
     pop_wrinklers: bool = False
     last_action: str = "(starting up)"
+    # Top heuristic candidates: (label, score, affordable_now)
+    next_buys: List[Tuple[str, float, bool]] = field(default_factory=list)
 
     def update(self, **kwargs) -> None:
         for k, v in kwargs.items():
@@ -60,6 +63,23 @@ _HOTKEY_HINT = (
     "[bold cyan]w[/]rinklers   "
     "[bold cyan]?[/] help"
 )
+
+
+def _format_next_buys(next_buys: List[Tuple[str, float, bool]]) -> str:
+    if not next_buys:
+        return "[dim]—[/]"
+    # Normalize to the top candidate so the best buy always reads 1 and the rest
+    # show as a fraction of it. Keeps the display stable under Frenzy/buff CPS
+    # swings (those scale every score equally, so the ratios are unchanged).
+    base = next_buys[0][1] or 1.0
+    lines = []
+    for i, (label, score, affordable) in enumerate(next_buys, 1):
+        # Green = can afford right now, dim = still saving up for it.
+        style = "green" if affordable else "dim"
+        ratio = score / base if base else 0.0
+        # \[ escapes a literal bracket so rich doesn't read it as a markup tag.
+        lines.append(f"[{style}]{i}. {label} \\[{ratio:.3g}][/]")
+    return "\n".join(lines)
 
 
 def render(status: BotStatus) -> Panel:
@@ -79,6 +99,7 @@ def render(status: BotStatus) -> Panel:
     grid.add_row("achievements", f"{status.achievements_owned}")
     grid.add_row("wrinklers", "[red]popping[/]" if status.pop_wrinklers else "holding")
     grid.add_row("last action", status.last_action)
+    grid.add_row("next buys", _format_next_buys(status.next_buys))
 
     body = Group(grid, Text(), Text.from_markup(_HOTKEY_HINT, justify="center"))
     return Panel(body, title="Cookie Clicker Bot", border_style="yellow", expand=False)

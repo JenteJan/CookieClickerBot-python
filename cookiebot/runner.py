@@ -141,6 +141,7 @@ class CookieBot:
                 gain=parse_upgrade_gain(desc or ""),
                 base_price=float(base_price),
                 unlocks_achievement=unlocks,
+                name=name or f"upgrade #{uid}",
             )
         log.info("indexed %d upgrades (%d flagged as achievement-unlocks)",
                  len(self.upgrades_by_id), ach)
@@ -175,10 +176,31 @@ class CookieBot:
         ]
         best_upgrade = max(scored_upgrades, key=lambda x: x[1], default=(None, 0.0))
 
+        self._update_next_buys(cookies, buildings, scored_upgrades)
+
         if best_upgrade[1] > best_building.heuristic and best_upgrade[0] is not None:
             self._maybe_buy_upgrade(best_upgrade[0], cookies, cookies_ps)
         else:
             self._maybe_buy_building(best_building, cookies, cookies_ps)
+
+    def _update_next_buys(
+        self,
+        cookies: float,
+        buildings: list[Building],
+        scored_upgrades: list[tuple[int, float]],
+    ) -> None:
+        """Push the top-3 candidates (buildings + upgrades) to the status panel."""
+        candidates = [(b.name, b.heuristic, b.price) for b in buildings]
+        candidates += [
+            (self.upgrades_by_id[uid].name, score, self.upgrades_by_id[uid].base_price)
+            for uid, score in scored_upgrades
+        ]
+        candidates.sort(key=lambda c: c[1], reverse=True)
+        self._status.update(
+            next_buys=[
+                (name, score, cookies >= price) for name, score, price in candidates[:3]
+            ]
+        )
 
     def _affordable_with_reserve(self, cookies: float, cookies_ps: float, price: float) -> bool:
         """Once all 3 holding upgrades are owned, keep a reserve so Lucky! payouts hit the cap."""
