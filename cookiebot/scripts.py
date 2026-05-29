@@ -43,7 +43,11 @@ return {
             totalCps: totalCps
         };
     }),
-    upgradesInStore: Game.UpgradesInStore.map(function(u) { return u.id; })
+    // getPrice() reflects live discounts (Master of the Armory aura, Season,
+    // Five-finger discount, Haggler's Charm) that the cached basePrice misses.
+    upgradesInStore: Game.UpgradesInStore.map(function(u) {
+        return {id: u.id, price: (u.getPrice ? u.getPrice() : u.basePrice)};
+    })
 };
 """
 

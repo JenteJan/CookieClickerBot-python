@@ -120,27 +120,35 @@ def parse_upgrade_gain(description: str) -> UpgradeGain:
     return UpgradeGain(0.05, "all")
 
 
-def score_upgrade(up: Upgrade, cookies_ps: float, buildings: list[Building]) -> float:
-    """Estimated cps-per-cost. Higher is better. Falls back to 0 when uncertain."""
-    if up.base_price <= 0 or cookies_ps <= 0:
+def score_upgrade(
+    up: Upgrade, cookies_ps: float, buildings: list[Building], price: float | None = None
+) -> float:
+    """Estimated cps-per-cost. Higher is better. Falls back to 0 when uncertain.
+
+    ``price`` is the live purchase price (from getPrice(), reflecting discounts);
+    falls back to the cached base price when not supplied.
+    """
+    if price is None:
+        price = up.base_price
+    if price <= 0 or cookies_ps <= 0:
         return 0.0
     target = up.gain.target
     if target == "all":
-        score = (up.gain.factor * cookies_ps) / up.base_price
+        score = (up.gain.factor * cookies_ps) / price
     elif target == "clicking":
         # Click upgrades are evaluated as roughly 15 effective clicks/sec.
-        score = (cookies_ps * up.gain.factor * 15) / up.base_price
+        score = (cookies_ps * up.gain.factor * 15) / price
     else:
         needle = target.lower()
         score = 0.0
         for b in buildings:
             if needle in b.name.lower() or needle == "factorie":
-                score = (up.gain.factor * b.total_cps) / up.base_price
+                score = (up.gain.factor * b.total_cps) / price
                 break
 
     # Achievement-unlock bonus: purchases that tick an Elder/Veteran/Jellicles
     # threshold add roughly +0.48% of CPS via the milk multiplier — invisible
     # to the description parser, so add it here.
     if up.unlocks_achievement:
-        score += (_ACHIEVEMENT_CPS_FRACTION * cookies_ps) / up.base_price
+        score += (_ACHIEVEMENT_CPS_FRACTION * cookies_ps) / price
     return score

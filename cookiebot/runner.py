@@ -158,7 +158,10 @@ class CookieBot:
             cookies=cookies, cookies_ps=cookies_ps, reserve_target_s=reserve_target
         )
         buildings: list[Building] = [building_from_js(b) for b in snap["buildings"]]
-        store_ids: list[int] = [int(i) for i in snap["upgradesInStore"]]
+        # Live per-upgrade prices keyed by id (reflects active discounts).
+        store_prices: dict[int, float] = {
+            int(u["id"]): float(u["price"]) for u in snap["upgradesInStore"]
+        }
 
         if not buildings:
             return
@@ -174,16 +177,16 @@ class CookieBot:
 
         best_building = max(buildings, key=lambda b: b.heuristic)
         scored_upgrades = [
-            (uid, score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings))
-            for uid in store_ids
+            (uid, score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings, store_prices[uid]))
+            for uid in store_prices
             if uid in self.upgrades_by_id
         ]
         best_upgrade = max(scored_upgrades, key=lambda x: x[1], default=(None, 0.0))
 
-        self._update_next_buys(cookies, buildings, scored_upgrades)
+        self._update_next_buys(cookies, buildings, scored_upgrades, store_prices)
 
         if best_upgrade[1] > best_building.heuristic and best_upgrade[0] is not None:
-            self._maybe_buy_upgrade(best_upgrade[0], cookies, cookies_ps)
+            self._maybe_buy_upgrade(best_upgrade[0], cookies, cookies_ps, store_prices[best_upgrade[0]])
         else:
             self._maybe_buy_building(best_building, cookies, cookies_ps)
 
@@ -192,11 +195,12 @@ class CookieBot:
         cookies: float,
         buildings: list[Building],
         scored_upgrades: list[tuple[int, float]],
+        store_prices: dict[int, float],
     ) -> None:
         """Push the top-3 candidates (buildings + upgrades) to the status panel."""
         candidates = [(b.name, b.heuristic, b.price) for b in buildings]
         candidates += [
-            (self.upgrades_by_id[uid].name, score, self.upgrades_by_id[uid].base_price)
+            (self.upgrades_by_id[uid].name, score, store_prices[uid])
             for uid, score in scored_upgrades
         ]
         candidates.sort(key=lambda c: c[1], reverse=True)
@@ -221,9 +225,9 @@ class CookieBot:
         if self._affordable_with_reserve(cookies, cookies_ps, b.price):
             self._buy_building(b)
 
-    def _maybe_buy_upgrade(self, uid: int, cookies: float, cookies_ps: float) -> None:
+    def _maybe_buy_upgrade(self, uid: int, cookies: float, cookies_ps: float, price: float) -> None:
         up = self.upgrades_by_id[uid]
-        if self._affordable_with_reserve(cookies, cookies_ps, up.base_price):
+        if self._affordable_with_reserve(cookies, cookies_ps, price):
             log.info("buy upgrade id=%s reserve=%.1fs cps=%.2f", uid, cookies / cookies_ps, cookies_ps)
             self.driver.execute_script(scripts.BUY_UPGRADE, uid)
             if uid in GOLDEN_COOKIE_UPGRADE_IDS:
