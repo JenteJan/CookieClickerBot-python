@@ -32,6 +32,9 @@ _console = Console()
 
 def show_menu(cfg: Config) -> Config | None:
     """Run the menu loop. Returns the Config to launch with, or None to quit."""
+    # Always start by choosing which save profile to play.
+    if not _select_profile(cfg):
+        return None
     while True:
         _render(cfg)
         choice = Prompt.ask(
@@ -53,6 +56,45 @@ def show_menu(cfg: Config) -> Config | None:
             _save_profiles(cfg)
         elif choice == "6":
             return None
+
+
+def _select_profile(cfg: Config) -> bool:
+    """Startup profile picker. Lists existing profiles and lets the user pick one
+    or create a new save slot. Sets cfg.save_profile. Returns False to quit."""
+    # Guarantee at least the default profile exists to choose from.
+    if not list_profiles():
+        create_profile(DEFAULT_PROFILE)
+    while True:
+        profiles = list_profiles()
+        _console.print()
+        _console.print(Panel.fit("Select a save profile", style="bold yellow"))
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("#", style="dim", justify="right")
+        table.add_column("Profile")
+        table.add_column("Save")
+        table.add_column("Status")
+        for i, name in enumerate(profiles, 1):
+            owner = lock_owner(name)
+            status = f"[yellow]running (pid {owner})[/yellow]" if owner else "[dim]free[/dim]"
+            marker = " [green]←[/green]" if name == cfg.save_profile else ""
+            table.add_row(str(i), name + marker, save_info(profile_save_file(name)), status)
+        _console.print(table)
+        _console.print()
+        _console.print("  pick a [bold]number[/bold] to play it, "
+                       "[bold]n[/bold]) new save slot, [bold]q[/bold]) quit")
+        choices = [str(i) for i in range(1, len(profiles) + 1)] + ["n", "q"]
+        default = str(profiles.index(cfg.save_profile) + 1) if cfg.save_profile in profiles else "1"
+        answer = Prompt.ask("Choose", choices=choices, default=default, show_choices=False)
+        if answer == "q":
+            return False
+        if answer == "n":
+            created = _new_profile(cfg)
+            if created:
+                return True  # _new_profile set cfg.save_profile and we play it
+            continue
+        cfg.save_profile = profiles[int(answer) - 1]
+        save_settings(SETTINGS_FILE, cfg)
+        return True
 
 
 def _render(cfg: Config) -> None:
@@ -221,20 +263,24 @@ def _switch_profile(cfg: Config, profiles: list[str]) -> None:
     _console.print(f"  active profile → [green]{name}[/green]")
 
 
-def _new_profile(cfg: Config) -> None:
+def _new_profile(cfg: Config) -> bool:
+    """Create a new profile. Returns True if it became the active profile."""
     raw = Prompt.ask("New profile name")
     name = sanitize_profile(raw)
     if profile_exists(name):
         _console.print(f"  [red]profile '{name}' already exists[/red]")
-        return
+        return False
     copy = None
-    if Confirm.ask(f"Copy current profile '{cfg.save_profile}' into '{name}'?", default=False):
-        copy = cfg.save_profile
+    if cfg.save_profile and profile_exists(cfg.save_profile):
+        if Confirm.ask(f"Copy current profile '{cfg.save_profile}' into '{name}'?", default=False):
+            copy = cfg.save_profile
     create_profile(name, copy_from=copy)
+    _console.print(f"  created [green]{name}[/green]")
     if Confirm.ask(f"Switch to '{name}' now?", default=True):
         cfg.save_profile = name
         save_settings(SETTINGS_FILE, cfg)
-    _console.print(f"  created [green]{name}[/green]")
+        return True
+    return False
 
 
 def _restore_archive(cfg: Config) -> None:

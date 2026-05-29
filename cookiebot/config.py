@@ -6,27 +6,45 @@ GAME_URL = "https://orteil.dashnet.org/cookieclicker/"
 # Saves live in a dedicated gitignored folder next to the package.
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SAVES_DIR = PROJECT_DIR / "saves"
-# Named save profiles (one file per profile) enable A/B testing different
-# strategies side by side and restoring earlier states.
-PROFILES_DIR = SAVES_DIR / "profiles"
-ARCHIVES_DIR = SAVES_DIR / "archives"
-DEFAULT_PROFILE = "default"
-# Pre-profiles locations, kept for one-time migration.
-SAVE_FILE = SAVES_DIR / "CookieAISaveData.txt"
-LEGACY_SAVE_FILE = PROJECT_DIR / "CookieAISaveData.txt"
-BACKUPS_DIR = SAVES_DIR / "backups"
 SETTINGS_FILE = SAVES_DIR / "settings.json"
 
+# Each named profile is a self-contained folder so its save, backups, and
+# archives are grouped together:
+#   saves/profiles/<name>/save.txt
+#   saves/profiles/<name>/backups/<timestamp>.txt
+#   saves/profiles/<name>/archives/<timestamp>.txt
+PROFILES_DIR = SAVES_DIR / "profiles"
+DEFAULT_PROFILE = "default"
 
-def sanitize_profile(name: str) -> str:
-    """Reduce a profile name to a safe filename stem. Falls back to the default."""
-    cleaned = "".join(c for c in (name or "").strip() if c.isalnum() or c in " -_").strip()
-    return cleaned or DEFAULT_PROFILE
+# Pre-reorg locations, kept only for one-time migration into the layout above.
+_LEGACY_ROOT_SAVE = PROJECT_DIR / "CookieAISaveData.txt"
+_LEGACY_SAVES_SAVE = SAVES_DIR / "CookieAISaveData.txt"
+_LEGACY_FLAT_BACKUPS = SAVES_DIR / "backups"
+_LEGACY_FLAT_ARCHIVES = SAVES_DIR / "archives"
+
+
+def profile_dir(name: str) -> Path:
+    return PROFILES_DIR / sanitize_profile(name)
 
 
 def profile_save_file(name: str) -> Path:
     """Path to a named profile's save file."""
-    return PROFILES_DIR / f"{sanitize_profile(name)}.txt"
+    return profile_dir(name) / "save.txt"
+
+
+def profile_backups_dir(name: str) -> Path:
+    return profile_dir(name) / "backups"
+
+
+def profile_archives_dir(name: str) -> Path:
+    return profile_dir(name) / "archives"
+
+
+def sanitize_profile(name: str) -> str:
+    """Reduce a profile name to a safe folder name. Falls back to the default."""
+    cleaned = "".join(c for c in (name or "").strip() if c.isalnum() or c in " -_").strip()
+    return cleaned or DEFAULT_PROFILE
+
 
 OBJECT_NAMES = [
     "Cursor", "Grandma", "Farm", "Mine", "Factory", "Bank", "Temple",

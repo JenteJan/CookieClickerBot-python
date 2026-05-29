@@ -75,18 +75,31 @@ ticks. The in-page auto-clicker and golden-cookie popper keep running
 
 ## Save files
 
-Each save is a named **profile** stored at `saves/profiles/<name>.txt`
-(gitignored). The bot loads and saves the active profile; the default is
-`default`. To import an existing save, export it from the game and paste its
-contents into the profile file before starting. Restart the bot after editing
-a save or after prestiging.
+Each save is a named **profile** with its own self-contained folder
+(everything under `saves/` is gitignored):
+
+```
+saves/
+  settings.json
+  profiles/
+    <name>/
+      save.txt              # the live save
+      backups/<timestamp>.txt
+      archives/<timestamp>.txt
+```
+
+So a profile's backups and archives always travel with it. To import an
+existing save, export it from the game and paste its contents into
+`saves/profiles/<name>/save.txt` before starting. Restart the bot after
+editing a save or after prestiging.
 
 ### Profiles (A/B testing)
 
-The menu's **Save profiles** screen lets you create, switch, restore, and
-delete named profiles. Use `--profile <name>` to pick one from the CLI. To
-compare two strategies side by side, run two instances with different
-profiles and browsers:
+On launch the menu **always asks which profile to play** and offers to create
+a new save slot. The **Save profiles** screen also lets you switch, branch,
+restore, and delete profiles mid-menu. Use `--profile <name>` to pick one from
+the CLI. To compare two strategies side by side, run two instances with
+different profiles and browsers:
 
 ```sh
 python cookieBot.py --profile aggressive --no-menu
@@ -94,15 +107,15 @@ python cookieBot.py --profile conservative --browser chrome --no-menu
 ```
 
 Each profile can only be run by one instance at a time — a lock file
-(`saves/profiles/<name>.lock` holding the owning PID) prevents two instances
-from writing the same save and clobbering each other. If you launch a second
-instance on a profile that's already running, the menu offers to **branch** it
-(copy the in-progress save into a new slot so you can A/B test from the same
-point) or pick another free profile; with `--no-menu` it explains and exits.
-Locks from crashed processes are detected and cleared automatically.
+(`saves/profiles/<name>/instance.lock` holding the owning PID) prevents two
+instances from writing the same save and clobbering each other. If you launch a
+second instance on a profile that's already running, the menu offers to
+**branch** it (copy the in-progress save into a new slot so you can A/B test
+from the same point) or pick another free profile; with `--no-menu` it explains
+and exits. Locks from crashed processes are detected and cleared automatically.
 
 "New game" archives the current profile's save to
-`saves/archives/<profile>_<timestamp>.txt` before resetting, and the Save
+`saves/profiles/<name>/archives/<timestamp>.txt` before resetting, and the Save
 profiles screen can restore any archive.
 
 ### Backups

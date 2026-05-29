@@ -1,19 +1,20 @@
 """Per-profile lock files so two running instances can't share (and clobber)
-the same save. A lock is a small file next to the profile holding the owning
-PID; a lock whose PID is no longer alive is treated as stale and ignored."""
+the same save. The lock lives inside the profile's own folder and holds the
+owning PID; a lock whose PID is no longer alive is treated as stale and
+ignored."""
 from __future__ import annotations
 
 import logging
 import os
 from pathlib import Path
 
-from cookiebot.config import PROFILES_DIR, sanitize_profile
+from cookiebot.config import profile_dir, sanitize_profile
 
 log = logging.getLogger(__name__)
 
 
 def _lock_path(profile: str) -> Path:
-    return PROFILES_DIR / f"{sanitize_profile(profile)}.lock"
+    return profile_dir(profile) / "instance.lock"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -84,7 +85,7 @@ class ProfileLock:
         if not self._held:
             return
         # Only remove the lock if it's still ours.
-        if lock_owner(self.profile) == os.getpid() or self._is_our_file():
+        if self._is_our_file():
             try:
                 self.path.unlink()
             except OSError:

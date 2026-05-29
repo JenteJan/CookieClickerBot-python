@@ -15,10 +15,10 @@ from rich.panel import Panel
 
 from cookiebot import achievements, scripts
 from cookiebot.config import (
-    BACKUPS_DIR,
     GOLDEN_COOKIE_UPGRADE_IDS,
     SETTINGS_FILE,
     Config,
+    profile_backups_dir,
     profile_save_file,
 )
 from cookiebot.driver import build_driver, open_game, start_auto_intervals
@@ -298,7 +298,8 @@ class CookieBot:
         self._refresh_achievement_count()
 
     def backup_tick(self) -> None:
-        path = write_backup(self.driver, BACKUPS_DIR, self.cfg.backup_retention_days)
+        backups_dir = profile_backups_dir(self.cfg.save_profile)
+        path = write_backup(self.driver, backups_dir, self.cfg.backup_retention_days)
         if path is not None:
             self._status.update(last_action=f"backup → {path.name}")
 
