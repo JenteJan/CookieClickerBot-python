@@ -103,7 +103,13 @@ return total;
 """
 
 BUY_BUILDING = "Game.Objects[arguments[0]].buy(arguments[1]);"
-BUY_UPGRADE = "Game.UpgradesById[arguments[0]].click(event);"
+# buy(1) passes bypass=truthy, which skips the click-handler. For most upgrades
+# .click() is fine, but grandmapocalypse upgrades (One Mind, Communal Brainsweep,
+# Elder Pact, …) attach a clickFunction that opens a blocking confirm Prompt and
+# returns false — so .click() every tick re-spawns that modal and freezes the UI.
+# buy(1) is exactly what the game's own "Yes" button calls, so it purchases
+# directly with no modal.
+BUY_UPGRADE = "Game.UpgradesById[arguments[0]].buy(1);"
 
 # Click the news ticker iff a clickable fortune is currently showing.
 # Gated on the 'Fortune cookies' heavenly upgrade — without it the game can't
