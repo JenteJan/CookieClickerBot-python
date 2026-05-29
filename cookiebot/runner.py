@@ -288,8 +288,9 @@ class CookieBot:
         self.driver.execute_script(scripts.PLANT_CLOVERS)
         self.driver.execute_script(scripts.CHECK_STOCK_MARKET)
         self.driver.execute_script(scripts.SET_PANTHEON)
-        if self._pop_wrinklers:
-            self.driver.execute_script(scripts.POP_WRINKLERS)
+        if self.cfg.auto_pop_wrinklers_in_frenzy:
+            if self.driver.execute_script(scripts.POP_WRINKLERS_IF_FRENZY):
+                self._status.update(last_action="popped wrinklers (frenzy)")
 
     def save_tick(self) -> None:
         self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS)
