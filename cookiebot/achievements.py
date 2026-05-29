@@ -4,7 +4,11 @@ Each entry has a JS snippet executed in the page context. The runner checks
 ``Game.Achievements[name].won`` before firing so re-running an enabled
 achievement on a save that already owns it is a no-op.
 
-Catalog sourced from cookieclicker.wiki.gg / fandom and the live main.js.
+Several of these are awarded by the game inside an *event handler* (the ticker
+click handler) or a *prompt button* (the bakery-name dialog), not by the
+underlying setter function — so the snippet calls ``Game.Win(name)`` directly,
+which is idempotent and is exactly what those handlers do. Triggers verified
+against the live main.js.
 """
 from __future__ import annotations
 
@@ -38,8 +42,20 @@ SAFE: list[Achievement] = [
     ),
     Achievement(
         name="Tabloid addiction",
-        js="for (var i = 0; i < 60; i++) { try { Game.TickerDraw(); } catch (e) {} }",
-        note="Cycle the news ticker 50+ times.",
+        # The 50-ticker-clicks achievement is awarded in the tickerL click
+        # *event handler* (it bumps Game.TickerClicks then Game.Win), NOT by
+        # TickerDraw — so the old TickerDraw loop did nothing. Bump the counter
+        # and award directly, exactly what 50 real clicks would do.
+        js="Game.TickerClicks = Math.max(Game.TickerClicks, 50); Game.Win('Tabloid addiction');",
+        note="Equivalent to clicking the news ticker 50 times.",
+    ),
+    Achievement(
+        name="Stifling the press",
+        # Normally awarded by clicking the ticker while the window is narrow
+        # enough to compress the ticker (windowW < tickerTooNarrow) — not
+        # reliably reproducible from script, so award it directly.
+        js="Game.Win('Stifling the press');",
+        note="Click the ticker in a very narrow window (force-won here).",
     ),
     Achievement(
         name="Uncanny clicker",
@@ -51,8 +67,11 @@ SAFE: list[Achievement] = [
     ),
     Achievement(
         name="What's in a name",
-        js="Game.bakeryNameSet('CookieBot');",
-        note="Renames the bakery to 'CookieBot' (cosmetic, only fires if not already named something custom).",
+        # bakeryNameSet only sets the name; "What's in a name" is awarded by the
+        # name prompt's Confirm button via Game.Win. So set a name (cosmetic)
+        # AND award directly — together that's exactly what naming the bakery does.
+        js="if (!Game.bakeryName || Game.bakeryName === 'Test') Game.bakeryNameSet('CookieBot'); Game.Win(\"What's in a name\");",
+        note="Names the bakery (awards the naming achievement).",
     ),
     Achievement(
         name="Cookie-dunker",
