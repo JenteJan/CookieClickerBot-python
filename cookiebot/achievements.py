@@ -9,6 +9,10 @@ click handler) or a *prompt button* (the bakery-name dialog), not by the
 underlying setter function — so the snippet calls ``Game.Win(name)`` directly,
 which is idempotent and is exactly what those handlers do. Triggers verified
 against the live main.js.
+
+"Stifling the press" is intentionally NOT here: it's earned legitimately in
+the runner, which clicks the ticker only when it's genuinely in the narrow
+"help!" state — we never force it.
 """
 from __future__ import annotations
 
@@ -48,14 +52,6 @@ SAFE: list[Achievement] = [
         # and award directly, exactly what 50 real clicks would do.
         js="Game.TickerClicks = Math.max(Game.TickerClicks, 50); Game.Win('Tabloid addiction');",
         note="Equivalent to clicking the news ticker 50 times.",
-    ),
-    Achievement(
-        name="Stifling the press",
-        # Normally awarded by clicking the ticker while the window is narrow
-        # enough to compress the ticker (windowW < tickerTooNarrow) — not
-        # reliably reproducible from script, so award it directly.
-        js="Game.Win('Stifling the press');",
-        note="Click the ticker in a very narrow window (force-won here).",
     ),
     Achievement(
         name="Uncanny clicker",

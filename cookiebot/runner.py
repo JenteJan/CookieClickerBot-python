@@ -330,10 +330,15 @@ class CookieBot:
         self.driver.execute_script(scripts.GET_LUCKY)
 
     def achievement_threshold_tick(self) -> None:
-        # Tap the ticker only when a fortune is showing (free upgrade / GC / cookies).
-        if self.driver.execute_script(scripts.CLICK_TICKER_FORTUNE_IF_PRESENT):
+        # Click the ticker only when it's genuinely useful: a fortune is showing,
+        # or it's in the narrow-window "help!" state (awards Stifling the press).
+        clicked = self.driver.execute_script(scripts.CLICK_TICKER_IF_USEFUL)
+        if clicked == "fortune":
             log.info("clicked ticker fortune")
             self._status.update(last_action="clicked ticker fortune")
+        elif clicked == "stifling":
+            log.info("clicked ticker in help! state (Stifling the press)")
+            self._status.update(last_action="ticker: Stifling the press")
 
         snap = self.driver.execute_script(scripts.GAME_SNAPSHOT)
         cookies = float(snap["cookies"])

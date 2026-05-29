@@ -186,13 +186,23 @@ return up ? (up.bought == 1) : false;
 # We deliberately do NOT call Game.getNewTicker() to force extra rolls: a
 # player tapping the ticker triggers a manual reroll that skips the fortune
 # check, so force-rolling here would be doing something the UI can't do.
-CLICK_TICKER_FORTUNE_IF_PRESENT = """
-if (!Game.Has || !Game.Has('Fortune cookies')) return false;
-if (Game.TickerEffect && Game.TickerEffect.type === 'fortune') {
+CLICK_TICKER_IF_USEFUL = """
+// 1. A clickable fortune is showing (needs the Fortune cookies heavenly upgrade).
+if (Game.Has && Game.Has('Fortune cookies')
+    && Game.TickerEffect && Game.TickerEffect.type === 'fortune') {
     Game.tickerL.click();
-    return true;
+    return 'fortune';
 }
-return false;
+// 2. The window is narrow enough that the ticker shows "help!" — clicking it in
+// that state awards "Stifling the press" (the game checks windowW <
+// tickerTooNarrow in the click handler). This is a genuine click of the real
+// help-state ticker, not a forced win, so we only do it when that state holds.
+var stifling = Game.Achievements && Game.Achievements['Stifling the press'];
+if (Game.windowW < Game.tickerTooNarrow && stifling && !stifling.won) {
+    Game.tickerL.click();
+    return 'stifling';
+}
+return '';
 """
 
 # Find building-count achievements worth rushing toward. For each building we
