@@ -211,12 +211,16 @@ class CookieBot:
 
         def upgrade_score(uid: int) -> float:
             price = store_prices[uid]
-            # Payback mode: use the game's true marginal CPS when we have it
-            # cached (value-per-cost = Δcps / price); fall back to the parsed
-            # heuristic until the first marginal evaluation lands.
+            parsed = score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings, price)
+            # Payback mode is a HYBRID: take the larger of the parsed score and
+            # the game's true marginal-CPS score. The marginal catches passive
+            # multipliers (flavored cookies, kittens, tiers, synergies) the
+            # parser approximates; the parser catches golden-cookie / clicking
+            # upgrades whose value isn't passive CPS, so their true marginal is
+            # ~0 and a pure-marginal heuristic wrongly skips them.
             if self.cfg.payback_mode and uid in self._upgrade_marginals and price > 0:
-                return self._upgrade_marginals[uid] / price
-            return score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings, price)
+                return max(parsed, self._upgrade_marginals[uid] / price)
+            return parsed
 
         best_building = max(buildings, key=building_score)
         scored_upgrades = [
