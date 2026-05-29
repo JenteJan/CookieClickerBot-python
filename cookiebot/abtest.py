@@ -56,9 +56,15 @@ class ABTest:
             bot._schedule()
 
         log.info("A/B: both ready — starting simultaneously")
-        # Fire both auto-clickers as close together as possible.
+        # Both browsers share the OS wall clock. Pick a deadline ~1.5s out and
+        # have each instance gate its first click/purchase on Date.now() reaching
+        # it, so they truly begin the same instant regardless of which got its
+        # 'go' command first. (Date.now() is unavailable in this Python env, so
+        # read the page clock from one bot and add the lead.)
+        page_now = bot_a.driver.execute_script("return Date.now();")
+        start_at_ms = page_now + 1500
         for bot in self._bots:
-            bot.begin_play()
+            bot.begin_play(start_at_ms=start_at_ms)
 
         hotkeys_active = self._hotkeys.start()
         if not hotkeys_active:

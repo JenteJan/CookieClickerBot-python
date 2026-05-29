@@ -414,17 +414,21 @@ def _bonus_achievements(cfg: Config) -> None:
 
 
 def _pick_source_profile() -> str | None:
-    """Choose the single profile whose save both A/B sides will start from."""
+    """Choose what both A/B sides start from: a fresh game, or a profile's save.
+    Returns "" for a fresh game, a profile name to clone, or None to cancel."""
     profiles = list_profiles()
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", style="dim", justify="right")
-    table.add_column("Profile")
+    table.add_column("Start from")
     table.add_column("Save")
+    table.add_row("f", "[green]fresh game[/green] (both reset, empty save)", "")
     for i, name in enumerate(profiles, 1):
         table.add_row(str(i), name, save_info(profile_save_file(name)))
     _console.print(table)
-    choices = [str(i) for i in range(1, len(profiles) + 1)]
-    ans = Prompt.ask("Source save to clone for BOTH sides", choices=choices, default="1", show_choices=False)
+    choices = ["f"] + [str(i) for i in range(1, len(profiles) + 1)]
+    ans = Prompt.ask("Both sides start from", choices=choices, default="f", show_choices=False)
+    if ans == "f":
+        return ""  # fresh game
     return profiles[int(ans) - 1]
 
 
@@ -453,20 +457,25 @@ def show_ab_menu() -> tuple[Config, Config] | None:
     source = _pick_source_profile()
     if source is None:
         return None
+    fresh = (source == "")
 
     seed = Prompt.ask("Shared RNG seed (same for both → identical luck)", default="ab-trial")
 
-    # Throwaway profiles so the source is never touched. Saves cloned identical.
+    # Throwaway profiles so the source is never touched. Either clone the source
+    # save into both, or start both from an empty save + hard reset (fresh).
     name_a, name_b = "ab-A", "ab-B"
     for nm in (name_a, name_b):
         create_profile(nm)
-        clone_profile_save(source, nm)
+        if fresh:
+            clone_profile_save("", nm)  # empty save
+        else:
+            clone_profile_save(source, nm)
 
-    # Base settings: copy the source's settings to BOTH so they're identical,
-    # then we'll diverge only one field on B.
+    # Base settings: from the source profile, or defaults for a fresh game.
     base = Config()
-    base.save_profile = source
-    load_profile_settings(base)
+    if not fresh:
+        base.save_profile = source
+        load_profile_settings(base)
 
     def build(name: str) -> Config:
         cfg = Config()
@@ -478,6 +487,7 @@ def show_ab_menu() -> tuple[Config, Config] | None:
         cfg.ab_seed = seed
         cfg.ab_log = True
         cfg.headless = False  # the whole point is to watch them
+        cfg.fresh = fresh     # hard-reset both at launch when starting fresh
         return cfg
 
     cfg_a, cfg_b = build(name_a), build(name_b)
@@ -495,7 +505,10 @@ def show_ab_menu() -> tuple[Config, Config] | None:
     save_profile_settings(cfg_b)
 
     _console.print()
-    _console.print(f"source save = [green]{source}[/green] (cloned to both, untouched)")
+    if fresh:
+        _console.print("start = [green]fresh game[/green] (both hard-reset at launch)")
+    else:
+        _console.print(f"source save = [green]{source}[/green] (cloned to both, untouched)")
     _console.print(f"A = ab-A   {field} = [cyan]{getattr(cfg_a, field)}[/cyan]")
     _console.print(f"B = ab-B   {field} = [cyan]{getattr(cfg_b, field)}[/cyan]   (only difference)")
     _console.print(f"seed = [cyan]{seed}[/cyan]")

@@ -115,6 +115,7 @@ class CookieBot:
         # unlock), refreshed on the same slow cadence.
         self._tier_bundles: list[dict] = []
         self._trial: TrialLogger | None = None  # set in setup() when ab_log is on
+        self._tick_gate_monotonic = 0.0  # A/B: hold purchases until shared start
         self._console = console or Console()
         self._hotkeys = HotkeyListener(self._enqueue_key)
         self._status = BotStatus()
@@ -582,10 +583,22 @@ class CookieBot:
 
     # ---- main loop --------------------------------------------------------
 
-    def begin_play(self) -> None:
-        """Start the in-page auto-clicker. Called by the A/B orchestrator to
-        kick off both runs at the same instant after both have loaded."""
-        start_auto_intervals(self.driver)
+    def begin_play(self, start_at_ms: float | None = None) -> None:
+        """Start the in-page auto-clicker. For A/B, pass a shared wall-clock
+        epoch (ms): both instances gate their first click on Date.now() reaching
+        it, so they begin the same instant regardless of Selenium latency. Also
+        gates this bot's Python-driven ticks (purchases) on the same moment."""
+        if start_at_ms is None:
+            start_auto_intervals(self.driver)
+            return
+        self.driver.execute_script(
+            scripts.START_AUTOCLICK_GATED,
+            AUTOCLICK_COOKIE_MS, AUTOCLICK_GOLDEN_MS, start_at_ms,
+        )
+        # Hold Python-driven ticks until the shared start, using local clock
+        # offset from the page clock measured at call time.
+        page_now = self.driver.execute_script("return Date.now();")
+        self._tick_gate_monotonic = time.monotonic() + max(0.0, (start_at_ms - page_now) / 1000.0)
 
     def _schedule(self) -> None:
         """Register all periodic tasks on the scheduler."""
@@ -612,6 +625,13 @@ class CookieBot:
         """Run one drain+schedule pass; returns seconds the caller may sleep.
         Lets an external loop (the A/B orchestrator) drive multiple bots."""
         self._drain_actions()
+        # A/B: hold all scheduled actions until the shared start moment so
+        # neither side purchases before the other.
+        if self._tick_gate_monotonic:
+            remaining = self._tick_gate_monotonic - time.monotonic()
+            if remaining > 0:
+                return min(remaining, 0.1)
+            self._tick_gate_monotonic = 0.0
         return self._sched.tick()
 
     @property

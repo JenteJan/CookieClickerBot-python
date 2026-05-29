@@ -55,6 +55,27 @@ window._autoGolden = setInterval(function() {
 }, arguments[0]);
 """
 
+# Gated auto-clicker start for A/B: both browsers share the OS wall clock, so
+# passing the same Date.now() deadline (arguments[2], ms epoch) makes both
+# instances actually begin clicking at the same instant — independent of when
+# Selenium delivers each command. Until the deadline the intervals run but
+# no-op. args: cookieMs, goldenMs, startAtMs.
+START_AUTOCLICK_GATED = """
+var cookieMs = arguments[0], goldenMs = arguments[1], startAt = arguments[2];
+window._abStartAt = startAt;
+if (window._autoClickCookie) clearInterval(window._autoClickCookie);
+if (window._autoGolden) clearInterval(window._autoGolden);
+window._autoClickCookie = setInterval(function() {
+    if (Date.now() >= window._abStartAt) Game.ClickCookie();
+}, cookieMs);
+window._autoGolden = setInterval(function() {
+    if (Date.now() >= window._abStartAt) {
+        while (Game.shimmers.length > 0) Game.shimmers[0].pop();
+    }
+}, goldenMs);
+return Date.now();
+"""
+
 # One round-trip snapshot of everything we evaluate per purchase tick.
 GAME_SNAPSHOT = """
 return {
