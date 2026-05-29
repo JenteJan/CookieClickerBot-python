@@ -112,8 +112,12 @@ if (Game.ObjectsById[2].minigame && Game.ObjectsById[2].minigame.plantsById[4].u
 }
 """
 
-# Cast Conjure Baked Goods when a frenzy-stack is up; if a really juicy combo
-# lands a moment later, sell temples + take loans + cast again.
+# Cast Force the Hand of Fate (spellsById[1]) when a frenzy-stack is up — it
+# spawns a golden cookie whose Lucky! payout scales with the bank, so during a
+# Frenzy this is the big combo. If a really juicy combo lands a moment later
+# (3+ buffs incl. Click frenzy / Dragonflight), inflate the bank first by
+# selling 400 temples + taking all bank loans, then cast FtHoF again so the
+# 15%-of-bank payout is maximised.
 GET_LUCKY = """
 var FRENZY_BUFFS = [
     "Frenzy","Breakthrough","Extra cycles","Juicy profits","Winning streak",
