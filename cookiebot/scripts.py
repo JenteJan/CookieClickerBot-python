@@ -59,6 +59,36 @@ return Object.values(Game.Upgrades).map(function(u) {
 });
 """
 
+# True marginal CPS for every in-store upgrade, measured with the game's own
+# CalculateGains(): flag the upgrade bought, recompute, read the new cookiesPs,
+# then revert. This captures passive-multiplier upgrades (flavored cookies,
+# kittens, building tiers, synergies) that the description parser approximates
+# or misses. Wrapped in try/finally so a throw can't leave the live game in a
+# mutated state. Returns {id: deltaCps} and the baseline cps used.
+EVALUATE_UPGRADE_MARGINALS = """
+var base = Game.cookiesPs;
+var out = {};
+var store = Game.UpgradesInStore;
+for (var i = 0; i < store.length; i++) {
+    var u = store[i];
+    var was = u.bought;
+    var delta = 0;
+    try {
+        u.bought = 1;
+        Game.CalculateGains();
+        delta = Game.cookiesPs - base;
+    } catch (e) {
+        delta = 0;
+    } finally {
+        u.bought = was;
+    }
+    out[u.id] = delta;
+}
+// Restore the real CPS after all the hypotheticals.
+Game.CalculateGains();
+return {base: base, deltas: out};
+"""
+
 COUNT_GOLDEN_COOKIE_UPGRADES = """
 var ids = arguments[0];
 var total = 0;

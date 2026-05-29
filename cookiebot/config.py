@@ -6,11 +6,14 @@ GAME_URL = "https://orteil.dashnet.org/cookieclicker/"
 # Saves live in a dedicated gitignored folder next to the package.
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SAVES_DIR = PROJECT_DIR / "saves"
+# Global settings hold only which profile was last active. All strategy/browser
+# config lives per-profile so two instances can run genuinely different setups.
 SETTINGS_FILE = SAVES_DIR / "settings.json"
 
-# Each named profile is a self-contained folder so its save, backups, and
-# archives are grouped together:
+# Each named profile is a self-contained folder so its save, backups, archives,
+# and its own settings are grouped together:
 #   saves/profiles/<name>/save.txt
+#   saves/profiles/<name>/settings.json
 #   saves/profiles/<name>/backups/<timestamp>.txt
 #   saves/profiles/<name>/archives/<timestamp>.txt
 PROFILES_DIR = SAVES_DIR / "profiles"
@@ -40,6 +43,10 @@ def profile_archives_dir(name: str) -> Path:
     return profile_dir(name) / "archives"
 
 
+def profile_settings_file(name: str) -> Path:
+    return profile_dir(name) / "settings.json"
+
+
 def sanitize_profile(name: str) -> str:
     """Reduce a profile name to a safe folder name. Falls back to the default."""
     cleaned = "".join(c for c in (name or "").strip() if c.isalnum() or c in " -_").strip()
@@ -57,8 +64,14 @@ AUTOCLICK_COOKIE_MS = 25
 AUTOCLICK_GOLDEN_MS = 1000
 
 
-PERSISTABLE_FIELDS = (
+# Global settings file holds only the pointer to the last-active profile.
+GLOBAL_FIELDS = (
     "save_profile",
+)
+
+# Everything else is saved per-profile, so each A/B profile keeps its own
+# browser choice, strategy flags, reserves, etc.
+PROFILE_FIELDS = (
     "browser",
     "headless",
     "backup_interval_hours",
@@ -88,6 +101,7 @@ class Config:
     news_period_s: float = 0.5
     minigame_period_s: float = 4.0
     save_period_s: float = 30.0
+    marginals_period_s: float = 5.0  # payback-mode upgrade re-evaluation cadence
     ascend_period_s: float = 60.0
     dragon_period_s: float = 30.0
     # Timestamped backups separate from the main save file. 0 disables backups;

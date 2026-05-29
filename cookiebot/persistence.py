@@ -14,9 +14,11 @@ from pathlib import Path
 from cookiebot import scripts
 from cookiebot.config import (
     DEFAULT_PROFILE,
-    PERSISTABLE_FIELDS,
+    GLOBAL_FIELDS,
+    PROFILE_FIELDS,
     PROFILES_DIR,
     SAVES_DIR,
+    SETTINGS_FILE,
     Config,
     _LEGACY_FLAT_ARCHIVES,
     _LEGACY_FLAT_BACKUPS,
@@ -26,6 +28,7 @@ from cookiebot.config import (
     profile_backups_dir,
     profile_dir,
     profile_save_file,
+    profile_settings_file,
     sanitize_profile,
 )
 
@@ -98,6 +101,26 @@ def migrate_legacy_save() -> None:
             stray.unlink()
         except OSError:
             pass
+
+    # 7: the old global settings.json held per-profile fields (strategy, browser,
+    # reserves). Seed each existing profile that has no settings yet from it, then
+    # rewrite the global file to hold only the active-profile pointer.
+    if SETTINGS_FILE.exists():
+        try:
+            data = json.loads(SETTINGS_FILE.read_text() or "{}")
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        legacy_profile_cfg = {k: data[k] for k in PROFILE_FIELDS if k in data}
+        if legacy_profile_cfg:
+            for d in PROFILES_DIR.iterdir():
+                if d.is_dir() and not profile_settings_file(d.name).exists():
+                    profile_settings_file(d.name).write_text(
+                        json.dumps(legacy_profile_cfg, indent=2) + "\n"
+                    )
+            # Keep only the global pointer in the shared file.
+            keep = {k: data[k] for k in GLOBAL_FIELDS if k in data}
+            SETTINGS_FILE.write_text(json.dumps(keep, indent=2) + "\n")
+            log.info("split global settings → per-profile")
 
 
 def _rmdir_if_empty(path: Path) -> None:
@@ -275,25 +298,56 @@ def list_backups(backups_dir: Path) -> list[Path]:
 
 
 # ---- persistent user settings --------------------------------------------
+#
+# Split storage: the global file (saves/settings.json) holds only which profile
+# was last active; each profile's own settings.json holds its strategy/browser
+# config so two instances can run genuinely different setups.
 
 
-def load_settings(path: Path, cfg: Config) -> Config:
-    """Apply any persisted values onto ``cfg`` in place. Missing or invalid file is silently ignored."""
+def _apply_json(path: Path, cfg: Config, keys) -> None:
     if not path.exists():
-        return cfg
+        return
     try:
         data = json.loads(path.read_text() or "{}")
     except (json.JSONDecodeError, OSError):
         log.warning("could not read settings from %s; using defaults", path)
-        return cfg
+        return
     known = {f.name for f in fields(cfg)}
-    for k in PERSISTABLE_FIELDS:
+    for k in keys:
         if k in data and k in known:
             setattr(cfg, k, data[k])
+
+
+def _write_json(path: Path, cfg: Config, keys) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {k: getattr(cfg, k) for k in keys}
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def load_global_settings(cfg: Config) -> Config:
+    """Load the global pointer (which profile to use) onto cfg."""
+    _apply_json(SETTINGS_FILE, cfg, GLOBAL_FIELDS)
     return cfg
 
 
-def save_settings(path: Path, cfg: Config) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = {k: getattr(cfg, k) for k in PERSISTABLE_FIELDS}
-    path.write_text(json.dumps(data, indent=2) + "\n")
+def save_global_settings(cfg: Config) -> None:
+    _write_json(SETTINGS_FILE, cfg, GLOBAL_FIELDS)
+
+
+def load_profile_settings(cfg: Config, profile: str | None = None) -> Config:
+    """Load a profile's own strategy/browser settings onto cfg."""
+    _apply_json(profile_settings_file(profile or cfg.save_profile), cfg, PROFILE_FIELDS)
+    return cfg
+
+
+def save_profile_settings(cfg: Config, profile: str | None = None) -> None:
+    _write_json(profile_settings_file(profile or cfg.save_profile), cfg, PROFILE_FIELDS)
+
+
+def copy_profile_settings(src: str, dst: str) -> None:
+    """Copy one profile's settings.json to another (used when branching)."""
+    src_file = profile_settings_file(src)
+    if src_file.exists():
+        dst_file = profile_settings_file(dst)
+        dst_file.parent.mkdir(parents=True, exist_ok=True)
+        dst_file.write_text(src_file.read_text())

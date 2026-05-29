@@ -16,7 +16,6 @@ from rich.panel import Panel
 from cookiebot import achievements, scripts
 from cookiebot.config import (
     GOLDEN_COOKIE_UPGRADE_IDS,
-    SETTINGS_FILE,
     Config,
     profile_backups_dir,
     profile_save_file,
@@ -35,10 +34,11 @@ from cookiebot.heuristics import (
 from cookiebot.hotkeys import HotkeyListener
 from cookiebot.locks import ProfileInUseError, ProfileLock
 from cookiebot.persistence import (
+    load_global_settings,
+    load_profile_settings,
     load_save,
-    load_settings,
     migrate_legacy_save,
-    save_settings,
+    save_global_settings,
     write_backup,
     write_save,
 )
@@ -105,6 +105,9 @@ class CookieBot:
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
         self._dragon_aura_logged = False
+        # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
+        # payback mode (recomputing it every 50 ms purchase tick is too costly).
+        self._upgrade_marginals: dict[int, float] = {}
         self._console = console or Console()
         self._hotkeys = HotkeyListener(self._enqueue_key)
         self._status = BotStatus()
@@ -196,9 +199,18 @@ class CookieBot:
                 score += achievement_milk_bonus_cps(cookies_ps) / b.price
             return score
 
+        def upgrade_score(uid: int) -> float:
+            price = store_prices[uid]
+            # Payback mode: use the game's true marginal CPS when we have it
+            # cached (value-per-cost = Δcps / price); fall back to the parsed
+            # heuristic until the first marginal evaluation lands.
+            if self.cfg.payback_mode and uid in self._upgrade_marginals and price > 0:
+                return self._upgrade_marginals[uid] / price
+            return score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings, price)
+
         best_building = max(buildings, key=building_score)
         scored_upgrades = [
-            (uid, score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings, store_prices[uid]))
+            (uid, upgrade_score(uid))
             for uid in store_prices
             if uid in self.upgrades_by_id
         ]
@@ -291,6 +303,18 @@ class CookieBot:
         if self.cfg.auto_pop_wrinklers_in_frenzy:
             if self.driver.execute_script(scripts.POP_WRINKLERS_IF_FRENZY):
                 self._status.update(last_action="popped wrinklers (frenzy)")
+
+    def marginals_tick(self) -> None:
+        # Recompute true marginal CPS for in-store upgrades (payback mode only).
+        # Expensive (two CalculateGains per upgrade), so this runs on its own
+        # slow cadence and the purchase tick just reads the cache.
+        try:
+            result = self.driver.execute_script(scripts.EVALUATE_UPGRADE_MARGINALS)
+        except Exception:
+            log.exception("marginal evaluation failed")
+            return
+        deltas = result.get("deltas", {}) if result else {}
+        self._upgrade_marginals = {int(k): float(v) for k, v in deltas.items()}
 
     def save_tick(self) -> None:
         self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS)
@@ -435,6 +459,12 @@ class CookieBot:
         self._sched.every(self.cfg.news_period_s, self.achievement_threshold_tick, "achievement-thresholds")
         self._sched.every(self.cfg.minigame_period_s, self.minigame_tick, "minigames")
         self._sched.every(self.cfg.save_period_s, self.save_tick, "save")
+        if self.cfg.payback_mode:
+            # Prime the cache immediately so the first purchases use real
+            # marginals, then refresh on its own cadence.
+            self.marginals_tick()
+            self._sched.every(self.cfg.marginals_period_s, self.marginals_tick, "marginals")
+            log.info("payback mode on (true marginal-CPS upgrade scoring)")
         if self.cfg.backup_interval_hours > 0:
             self._sched.every(
                 self.cfg.backup_interval_hours * 3600,
@@ -488,7 +518,7 @@ class CookieBot:
 def _parse_args() -> tuple[Config, bool]:
     p = argparse.ArgumentParser(description="Cookie Clicker automation bot")
     # ``None`` sentinels let us tell explicit flags apart from defaults so the
-    # persisted settings file remains the source of truth unless overridden.
+    # persisted settings remain the source of truth unless overridden.
     p.add_argument("--browser", default=None, choices=("firefox", "chrome"))
     p.add_argument("--headless", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--fresh", action="store_true", help="Hard-reset the game on launch")
@@ -497,13 +527,17 @@ def _parse_args() -> tuple[Config, bool]:
     args = p.parse_args()
 
     cfg = Config()
-    load_settings(SETTINGS_FILE, cfg)
+    # 1. global pointer → which profile is active
+    load_global_settings(cfg)
+    if args.profile is not None:
+        cfg.save_profile = args.profile
+    # 2. that profile's own strategy/browser settings
+    load_profile_settings(cfg)
+    # 3. CLI overrides win for this launch
     if args.browser is not None:
         cfg.browser = args.browser
     if args.headless is not None:
         cfg.headless = args.headless
-    if args.profile is not None:
-        cfg.save_profile = args.profile
     cfg.fresh = args.fresh
     return cfg, args.no_menu
 
@@ -516,16 +550,18 @@ def main() -> None:
         datefmt="%H:%M:%S",
         handlers=[RichHandler(console=console, show_path=False, markup=True, rich_tracebacks=True)],
     )
-    cfg, no_menu = _parse_args()
-    # Migrate old saves into the profile layout before the menu lists profiles.
+    # Migrate old layouts (and split the old global settings) before anything
+    # reads settings or lists profiles.
     migrate_legacy_save()
+    cfg, no_menu = _parse_args()
     if not no_menu:
         from cookiebot.menu import show_menu
         result = show_menu(cfg)
         if result is None:
             return
         cfg = result
-    save_settings(SETTINGS_FILE, cfg)
+    # Persist the active-profile pointer; the menu already saved profile settings.
+    save_global_settings(cfg)
 
     # Acquire an exclusive lock on the chosen profile so two instances never
     # write the same save. On conflict, resolve interactively (branch to a new
@@ -533,7 +569,7 @@ def main() -> None:
     lock = _acquire_profile_lock(cfg, console, interactive=not no_menu)
     if lock is None:
         return
-    save_settings(SETTINGS_FILE, cfg)
+    save_global_settings(cfg)
     try:
         bot = CookieBot(cfg, console=console)
         bot.setup()

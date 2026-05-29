@@ -9,7 +9,6 @@ from rich.table import Table
 from cookiebot import achievements
 from cookiebot.config import (
     DEFAULT_PROFILE,
-    SETTINGS_FILE,
     Config,
     profile_save_file,
     sanitize_profile,
@@ -17,17 +16,28 @@ from cookiebot.config import (
 from cookiebot.locks import is_locked, lock_owner
 from cookiebot.persistence import (
     archive_profile,
+    copy_profile_settings,
     create_profile,
     delete_profile,
     list_archives,
     list_profiles,
+    load_profile_settings,
     profile_exists,
     restore_archive,
+    save_global_settings,
     save_info,
-    save_settings,
+    save_profile_settings,
 )
 
 _console = Console()
+
+
+def _activate_profile(cfg: Config, name: str) -> None:
+    """Make ``name`` the active profile: switch pointer, load that profile's own
+    settings onto cfg, and persist the global pointer."""
+    cfg.save_profile = name
+    load_profile_settings(cfg)  # adopt the target profile's strategy/browser
+    save_global_settings(cfg)
 
 
 def show_menu(cfg: Config) -> Config | None:
@@ -92,8 +102,7 @@ def _select_profile(cfg: Config) -> bool:
             if created:
                 return True  # _new_profile set cfg.save_profile and we play it
             continue
-        cfg.save_profile = profiles[int(answer) - 1]
-        save_settings(SETTINGS_FILE, cfg)
+        _activate_profile(cfg, profiles[int(answer) - 1])
         return True
 
 
@@ -192,8 +201,8 @@ def _edit_settings(cfg: Config) -> None:
             default=cfg.dragon_keep_buildings,
         )
         cfg.dragon_keep_buildings = max(0, keep)
-    save_settings(SETTINGS_FILE, cfg)
-    _console.print("  [dim]settings saved[/dim]")
+    save_profile_settings(cfg)
+    _console.print(f"  [dim]settings saved for profile '{cfg.save_profile}'[/dim]")
 
 
 def _format_interval(hours: float) -> str:
@@ -258,8 +267,7 @@ def _save_profiles(cfg: Config) -> None:
 
 def _switch_profile(cfg: Config, profiles: list[str]) -> None:
     name = Prompt.ask("Switch to which profile?", choices=profiles, default=cfg.save_profile)
-    cfg.save_profile = name
-    save_settings(SETTINGS_FILE, cfg)
+    _activate_profile(cfg, name)
     _console.print(f"  active profile → [green]{name}[/green]")
 
 
@@ -272,13 +280,17 @@ def _new_profile(cfg: Config) -> bool:
         return False
     copy = None
     if cfg.save_profile and profile_exists(cfg.save_profile):
-        if Confirm.ask(f"Copy current profile '{cfg.save_profile}' into '{name}'?", default=False):
+        if Confirm.ask(f"Copy current profile '{cfg.save_profile}' (save + settings) into '{name}'?", default=False):
             copy = cfg.save_profile
     create_profile(name, copy_from=copy)
+    if copy:
+        copy_profile_settings(copy, name)
+    else:
+        # Seed the new profile with the current in-memory config as a starting point.
+        save_profile_settings(cfg, profile=name)
     _console.print(f"  created [green]{name}[/green]")
     if Confirm.ask(f"Switch to '{name}' now?", default=True):
-        cfg.save_profile = name
-        save_settings(SETTINGS_FILE, cfg)
+        _activate_profile(cfg, name)
         return True
     return False
 
@@ -334,8 +346,8 @@ def resolve_locked_profile(cfg: Config, pid: int) -> bool:
             _console.print(f"  [red]'{name}' already exists; pick another name[/red]")
             return resolve_locked_profile(cfg, pid)
         create_profile(name, copy_from=source)
-        cfg.save_profile = name
-        save_settings(SETTINGS_FILE, cfg)
+        copy_profile_settings(source, name)  # branch inherits the same strategy
+        _activate_profile(cfg, name)
         _console.print(f"  branched [green]{source}[/green] → [green]{name}[/green]")
         return True
     # pick another existing profile
@@ -344,8 +356,7 @@ def resolve_locked_profile(cfg: Config, pid: int) -> bool:
         _console.print("  [dim]no free profiles; branch or create one instead[/dim]")
         return resolve_locked_profile(cfg, pid)
     name = Prompt.ask("Switch to which free profile?", choices=free, default=free[0])
-    cfg.save_profile = name
-    save_settings(SETTINGS_FILE, cfg)
+    _activate_profile(cfg, name)
     return True
 
 
@@ -359,8 +370,7 @@ def _delete_profile(cfg: Config, profiles: list[str]) -> None:
         return
     delete_profile(name)
     if cfg.save_profile == name:
-        cfg.save_profile = DEFAULT_PROFILE
-        save_settings(SETTINGS_FILE, cfg)
+        _activate_profile(cfg, DEFAULT_PROFILE)
     _console.print(f"  deleted [green]{name}[/green]")
 
 
@@ -398,5 +408,5 @@ def _bonus_achievements(cfg: Config) -> None:
         "Auto-fire [red]risky[/red] achievements on next start?",
         default=cfg.auto_fire_risky_achievements,
     )
-    save_settings(SETTINGS_FILE, cfg)
-    _console.print("  [dim]settings saved[/dim]")
+    save_profile_settings(cfg)
+    _console.print(f"  [dim]settings saved for profile '{cfg.save_profile}'[/dim]")
