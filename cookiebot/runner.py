@@ -297,6 +297,25 @@ class CookieBot:
         if path is not None:
             self._status.update(last_action=f"backup → {path.name}")
 
+    def ascend_tick(self) -> None:
+        info = self.driver.execute_script(scripts.ASCEND_INFO)
+        prestige = float(info["prestige"])
+        potential = float(info["potential"])
+        gain = potential - prestige
+        if gain < 1:
+            return
+        # First ascension (prestige 0): go as soon as there's a chip to gain.
+        # Otherwise require the configured relative jump.
+        gain_pct = float("inf") if prestige <= 0 else gain / prestige * 100
+        if gain_pct < self.cfg.auto_ascend_gain_pct:
+            return
+        log.info("auto-ascend: prestige %.0f → %.0f (+%.0f, %.1f%%)",
+                 prestige, potential, gain, gain_pct)
+        # Save before the reset so a crash mid-ascension can't lose progress.
+        write_save(self.driver, SAVE_FILE)
+        self.driver.execute_script(scripts.DO_ASCEND)
+        self._status.update(last_action=f"ascended (+{gain:.0f} prestige)")
+
     # ---- achievement helpers ----------------------------------------------
 
     def _refresh_achievement_count(self) -> None:
@@ -409,6 +428,9 @@ class CookieBot:
                 self.cfg.backup_interval_hours,
                 self.cfg.backup_retention_days,
             )
+        if self.cfg.auto_ascend:
+            self._sched.every(self.cfg.ascend_period_s, self.ascend_tick, "ascend", delay_first=True)
+            log.info("auto-ascend on (≥%.0f%% prestige gain)", self.cfg.auto_ascend_gain_pct)
         hotkeys_active = self._hotkeys.start()
         if not hotkeys_active:
             log.info("hotkeys unavailable (not a TTY); use ctrl-c to stop")

@@ -33,6 +33,8 @@ PERSISTABLE_FIELDS = (
     "auto_pop_wrinklers_in_frenzy",
     "payback_mode",
     "payback_cap_minutes",
+    "auto_ascend",
+    "auto_ascend_gain_pct",
 )
 
 
@@ -46,6 +48,7 @@ class Config:
     news_period_s: float = 0.5
     minigame_period_s: float = 4.0
     save_period_s: float = 30.0
+    ascend_period_s: float = 60.0
     # Timestamped backups separate from the main save file. 0 disables backups;
     # retention of 0 days keeps them forever.
     backup_interval_hours: float = 6.0
@@ -73,3 +76,8 @@ class Config:
     # payback_cap_minutes (0 = no cap). Off by default for easy A/B comparison.
     payback_mode: bool = False
     payback_cap_minutes: float = 0.0
+    # Auto-ascension. Off by default — ascending is a soft reset. When on, the
+    # bot reincarnates once ascending now would raise prestige level by at least
+    # auto_ascend_gain_pct (relative to current). Heavenly chips persist unspent.
+    auto_ascend: bool = False
+    auto_ascend_gain_pct: float = 10.0

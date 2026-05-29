@@ -224,6 +224,20 @@ for (var i = 0; i < bank.goodsById.length; i++) {
 }
 """
 
+ASCEND_INFO = """
+return {
+    prestige: Game.prestige,
+    potential: Game.HowMuchPrestige(Game.cookiesReset + Game.cookiesEarned)
+};
+"""
+
+# Force ascension (the 1 arg skips the confirm), then complete the rebirth a
+# moment later once the ascension screen has processed. Heavenly chips persist.
+DO_ASCEND = """
+Game.Ascend(1);
+setTimeout(function() { Game.Reincarnate(1); }, 1500);
+"""
+
 GET_SAVE_DATA = "return Game.WriteSave(1);"
 LOAD_SAVE_DATA = "return Game.LoadSave(arguments[0]);"
 HARD_RESET = "Game.HardReset(2);"

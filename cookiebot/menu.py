@@ -109,6 +109,16 @@ def _edit_settings(cfg: Config) -> None:
             default=cfg.payback_cap_minutes,
         )
         cfg.payback_cap_minutes = max(0.0, cap)
+    cfg.auto_ascend = Confirm.ask(
+        "Auto-ascend (soft reset) when worthwhile?",
+        default=cfg.auto_ascend,
+    )
+    if cfg.auto_ascend:
+        pct = FloatPrompt.ask(
+            "Ascend when prestige would grow by at least what %?",
+            default=cfg.auto_ascend_gain_pct,
+        )
+        cfg.auto_ascend_gain_pct = max(0.0, pct)
     save_settings(SETTINGS_FILE, cfg)
     _console.print("  [dim]settings saved[/dim]")
 
