@@ -94,10 +94,11 @@ return {base: base, deltas: out};
 """
 
 COUNT_GOLDEN_COOKIE_UPGRADES = """
-var ids = arguments[0];
+var names = arguments[0];
 var total = 0;
-for (var i = 0; i < ids.length; i++) {
-    if (Game.UpgradesById[ids[i]].bought == 1) total++;
+for (var i = 0; i < names.length; i++) {
+    var u = Game.Upgrades[names[i]];
+    if (u && u.bought == 1) total++;
 }
 return total;
 """

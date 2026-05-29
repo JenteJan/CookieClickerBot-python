@@ -58,7 +58,11 @@ OBJECT_NAMES = [
     "Wizard tower", "Shipment", "Alchemy lab", "Portal", "Time machine",
 ]
 
-GOLDEN_COOKIE_UPGRADE_IDS = [52, 53, 86]
+# The three "holding" upgrades that make banking cookies for Lucky! worthwhile.
+# Identified by NAME, not numeric id — upgrade ids shift between game versions,
+# and the old hardcoded [52, 53, 86] pointed at unrelated upgrades, which made
+# the bot think all three were owned at run start and bank 100 min immediately.
+GOLDEN_COOKIE_UPGRADE_NAMES = ["Lucky day", "Serendipity", "Get lucky"]
 
 AUTOCLICK_COOKIE_MS = 25
 AUTOCLICK_GOLDEN_MS = 1000

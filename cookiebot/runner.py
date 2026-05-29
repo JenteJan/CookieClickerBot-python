@@ -15,7 +15,7 @@ from rich.panel import Panel
 
 from cookiebot import achievements, scripts
 from cookiebot.config import (
-    GOLDEN_COOKIE_UPGRADE_IDS,
+    GOLDEN_COOKIE_UPGRADE_NAMES,
     Config,
     profile_backups_dir,
     profile_save_file,
@@ -125,7 +125,7 @@ class CookieBot:
         start_auto_intervals(self.driver)
         self._load_upgrade_catalog()
         self.golden_count = int(self.driver.execute_script(
-            scripts.COUNT_GOLDEN_COOKIE_UPGRADES, GOLDEN_COOKIE_UPGRADE_IDS,
+            scripts.COUNT_GOLDEN_COOKIE_UPGRADES, GOLDEN_COOKIE_UPGRADE_NAMES,
         ))
         self._status.update(
             golden_count=self.golden_count,
@@ -284,7 +284,7 @@ class CookieBot:
         if self._affordable_with_reserve(cookies, cookies_ps, price):
             log.info("buy upgrade id=%s reserve=%.1fs cps=%.2f", uid, cookies / cookies_ps, cookies_ps)
             self.driver.execute_script(scripts.BUY_UPGRADE, uid)
-            if uid in GOLDEN_COOKIE_UPGRADE_IDS:
+            if up.name in GOLDEN_COOKIE_UPGRADE_NAMES:
                 self.golden_count += 1
                 self._status.update(golden_count=self.golden_count)
             self._status.update(last_action=f"upgrade #{uid}")
