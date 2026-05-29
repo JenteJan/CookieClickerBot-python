@@ -224,11 +224,15 @@ for (var i = 0; i < bank.goodsById.length; i++) {
 }
 """
 
-# Level up Krumblor one step if it's affordable and safe. Middle levels call
-# Game.Objects[name].sacrifice(100) (permanent), detected by inspecting the
-# level's buy() source; such a level is only taken when the building keeps at
-# least arguments[0] units after the sacrifice. Requires the dragon to be
-# unlocked. Returns a small status object.
+# Level up Krumblor one step if it's affordable and safe (verified against live
+# main.js Game.dragonLevels / Game.UpgradeDragon).
+#   - cost() returns a BOOLEAN "requirement met" (e.g. Game.cookies>=N, or
+#     "own >=50 of every building"), not a cookie amount.
+#   - Aura-training levels (the long middle stretch) carry no cost/buy function;
+#     advancing them requires choosing WHICH aura via the UI, a strategic call
+#     we leave to the user. We stop ('needs_aura') there rather than guess.
+#   - The two sacrifice levels permanently sacrifice N of EVERY building; only
+#     taken when every building keeps at least arguments[0] units afterward.
 DRAGON_TRAIN = """
 var keep = arguments[0];
 if (!Game.Has || !Game.Has('How to bake your dragon')) return {locked: true};
@@ -236,20 +240,23 @@ var levels = Game.dragonLevels;
 var lvl = Game.dragonLevel;
 if (!levels || lvl >= levels.length - 1) return {maxed: true, level: lvl};
 var me = levels[lvl];
-// cost() returns a cookie amount; only proceed when we can actually afford it.
-if (Game.cookies < me.cost()) return {waiting: true, level: lvl, name: me.name};
+if (typeof me.cost !== 'function' || typeof me.buy !== 'function') {
+    return {needs_aura: true, level: lvl, name: me.name};
+}
+if (!me.cost()) return {waiting: true, level: lvl, name: me.name};
+// Sacrifice levels read "sacrifice(N)" inside a loop over Game.Objects; ensure
+// every building survives with >= keep units before committing.
 var buyStr = me.buy.toString();
-if (buyStr.indexOf('sacrifice') >= 0) {
-    var m = buyStr.match(/Objects\\['([^']+)'\\]\\.sacrifice\\((\\d+)\\)/);
-    if (m) {
-        var bname = m[1], n = parseInt(m[2]);
-        if (Game.Objects[bname].amount < keep + n) {
-            return {blocked: true, level: lvl, name: me.name, building: bname, need: keep + n};
+var sm = buyStr.match(/\\.sacrifice\\((\\d+)\\)/);
+if (sm) {
+    var n = parseInt(sm[1]);
+    for (var i in Game.Objects) {
+        if (Game.Objects[i].amount < keep + n) {
+            return {blocked: true, level: lvl, name: me.name, building: Game.Objects[i].name, need: keep + n};
         }
     }
 }
-Game.UpgradeDragon();  // calls me.buy(true): sacrifices (if any) and increments level
-// Confirm the level actually advanced before reporting success.
+Game.UpgradeDragon();  // re-checks cost() then buy()s and increments dragonLevel
 if (Game.dragonLevel > lvl) return {trained: true, level: Game.dragonLevel, name: me.name};
 return {waiting: true, level: lvl, name: me.name};
 """

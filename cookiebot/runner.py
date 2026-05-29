@@ -102,6 +102,7 @@ class CookieBot:
         self._sched = Scheduler()
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
+        self._dragon_aura_logged = False
         self._console = console or Console()
         self._hotkeys = HotkeyListener(self._enqueue_key)
         self._status = BotStatus()
@@ -305,6 +306,10 @@ class CookieBot:
         elif info.get("blocked"):
             log.info("dragon level held: needs %d %s to sacrifice safely",
                      info.get("need"), info.get("building"))
+        elif info.get("needs_aura") and not self._dragon_aura_logged:
+            # Aura choice is strategic — leave it to the user and only say so once.
+            log.info("dragon at an aura-training level; choose an aura manually to continue")
+            self._dragon_aura_logged = True
 
     def ascend_tick(self) -> None:
         info = self.driver.execute_script(scripts.ASCEND_INFO)
