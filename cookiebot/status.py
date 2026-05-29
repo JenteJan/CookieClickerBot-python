@@ -50,6 +50,8 @@ class BotStatus:
     last_action: str = "(starting up)"
     # Top heuristic candidates: (label, score, affordable_now)
     next_buys: List[Tuple[str, float, bool]] = field(default_factory=list)
+    # Cookie reserve we're banking toward (CPS-seconds). 0 = no reserve (buy freely).
+    reserve_target_s: float = 0.0
 
     def update(self, **kwargs) -> None:
         for k, v in kwargs.items():
@@ -65,6 +67,17 @@ _HOTKEY_HINT = (
 )
 
 
+def _format_reserve_target(status: BotStatus) -> str:
+    if status.reserve_target_s <= 0:
+        return "[dim]none[/]"
+    minutes = status.reserve_target_s / 60
+    # Highlight green once we've actually banked the target.
+    banked_s = status.cookies / status.cookies_ps if status.cookies_ps > 0 else 0.0
+    reached = banked_s >= status.reserve_target_s
+    label = f"{minutes:g} min"
+    return f"[green]{label} ✓[/]" if reached else label
+
+
 def _format_next_buys(next_buys: List[Tuple[str, float, bool]]) -> str:
     if not next_buys:
         return "[dim]—[/]"
@@ -74,8 +87,12 @@ def _format_next_buys(next_buys: List[Tuple[str, float, bool]]) -> str:
     base = next_buys[0][1] or 1.0
     lines = []
     for i, (label, score, affordable) in enumerate(next_buys, 1):
-        # Green = can afford right now, dim = still saving up for it.
-        style = "green" if affordable else "dim"
+        # #1 is the bot's actual target — highlight blue. Lower ranks: green if
+        # affordable right now, dim if still saving up.
+        if i == 1:
+            style = "bold blue"
+        else:
+            style = "green" if affordable else "dim"
         ratio = score / base if base else 0.0
         # \[ escapes a literal bracket so rich doesn't read it as a markup tag.
         lines.append(f"[{style}]{i}. {label} \\[{ratio:.3g}][/]")
@@ -95,6 +112,7 @@ def render(status: BotStatus) -> Panel:
     grid.add_row("cookies", format_number(status.cookies))
     grid.add_row("per second", f"{format_number(status.cookies_ps)} /s")
     grid.add_row("banked", format_duration(banked_s))
+    grid.add_row("target bank", _format_reserve_target(status))
     grid.add_row("golden upgrades", f"{status.golden_count}/3")
     grid.add_row("achievements", f"{status.achievements_owned}")
     grid.add_row("wrinklers", "[red]popping[/]" if status.pop_wrinklers else "holding")

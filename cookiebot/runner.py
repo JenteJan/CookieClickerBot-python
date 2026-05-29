@@ -152,7 +152,11 @@ class CookieBot:
         snap = self.driver.execute_script(scripts.GAME_SNAPSHOT)
         cookies: float = snap["cookies"]
         cookies_ps: float = snap["cookiesPs"]
-        self._status.update(cookies=cookies, cookies_ps=cookies_ps)
+        # The reserve only applies once all three holding upgrades are owned.
+        reserve_target = self.cfg.lucky_reserve_seconds if self.golden_count == 3 else 0.0
+        self._status.update(
+            cookies=cookies, cookies_ps=cookies_ps, reserve_target_s=reserve_target
+        )
         buildings: list[Building] = [building_from_js(b) for b in snap["buildings"]]
         store_ids: list[int] = [int(i) for i in snap["upgradesInStore"]]
 
