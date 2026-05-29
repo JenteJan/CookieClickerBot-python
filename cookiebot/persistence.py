@@ -91,6 +91,14 @@ def migrate_legacy_save() -> None:
         _rmdir_if_empty(_LEGACY_FLAT_ARCHIVES)
         log.info("migrated archives → per-profile folders")
 
+    # 6: remove orphaned lock files from the old location (profiles/<name>.lock).
+    # Locks now live at profiles/<name>/instance.lock; these are dead clutter.
+    for stray in PROFILES_DIR.glob("*.lock"):
+        try:
+            stray.unlink()
+        except OSError:
+            pass
+
 
 def _rmdir_if_empty(path: Path) -> None:
     try:
