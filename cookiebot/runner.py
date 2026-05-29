@@ -105,6 +105,7 @@ class CookieBot:
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
         self._dragon_aura_logged = False
+        self._sell_mode_logged = False
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
         self._upgrade_marginals: dict[int, float] = {}
@@ -169,6 +170,15 @@ class CookieBot:
         self._status.update(
             cookies=cookies, cookies_ps=cookies_ps, reserve_target_s=reserve_target
         )
+        # If the player has flipped the store to sell mode, .buy() is redirected
+        # to .sell() by the game — pause purchasing so we don't dump buildings.
+        if snap.get("buyMode", 1) == -1:
+            if not self._sell_mode_logged:
+                log.info("store in sell mode — pausing purchases")
+                self._sell_mode_logged = True
+            self._status.update(last_action="paused (sell mode)")
+            return
+        self._sell_mode_logged = False
         buildings: list[Building] = [building_from_js(b) for b in snap["buildings"]]
         # Live per-upgrade prices keyed by id (reflects active discounts).
         store_prices: dict[int, float] = {

@@ -29,6 +29,10 @@ GAME_SNAPSHOT = """
 return {
     cookies: Game.cookies,
     cookiesPs: Game.cookiesPs,
+    // -1 when the player has toggled the store to sell mode. While selling,
+    // Game.Objects[x].buy() is silently redirected to sell(), so the bot must
+    // not "purchase" or it would dump buildings on the user's behalf.
+    buyMode: Game.buyMode,
     buildings: Object.values(Game.Objects).map(function(b) {
         var totalCps = b.storedTotalCps * Game.globalCpsMult;
         var cps = b.storedCps * Game.globalCpsMult;
