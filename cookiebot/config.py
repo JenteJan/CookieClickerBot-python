@@ -47,6 +47,10 @@ def profile_settings_file(name: str) -> Path:
     return profile_dir(name) / "settings.json"
 
 
+def profile_trials_dir(name: str) -> Path:
+    return profile_dir(name) / "trials"
+
+
 def sanitize_profile(name: str) -> str:
     """Reduce a profile name to a safe folder name. Falls back to the default."""
     cleaned = "".join(c for c in (name or "").strip() if c.isalnum() or c in " -_").strip()
@@ -114,6 +118,13 @@ class Config:
     # already-won ones are skipped automatically.)
     achievement_max_step: int = 50
     achievement_payback_cap_s: float = 1200.0  # 20 min of CPS
+    # A/B trial mode. When ab_seed is set, RNG is forced deterministic (same
+    # seed for both runs → identical starting luck). When ab_log is True, the
+    # bot writes a structured JSONL trial log (snapshots + purchase/buff events)
+    # to the profile's folder for offline comparison.
+    ab_seed: str = ""
+    ab_log: bool = False
+    ab_snapshot_period_s: float = 5.0  # how often to log a state snapshot
     # Timestamped backups separate from the main save file. 0 disables backups;
     # retention of 0 days keeps them forever.
     backup_interval_hours: float = 6.0

@@ -12,6 +12,37 @@ return typeof Game !== 'undefined'
 
 CLOSE_PROMPT = "Game.ClosePrompt();"
 
+# Force deterministic RNG for A/B trials. The game pins per-event randomness to
+# Game.seed (e.g. "seed/lumpT", "seed-fortune"), but also calls Math.seedrandom()
+# with NO argument 11 times to deliberately go back to entropy — which would
+# defeat a one-time seed. So we (a) pin Game.seed to a fixed value, and
+# (b) wrap Math.seedrandom so a no-arg "go random" call instead re-keys from our
+# fixed seed plus a monotonic counter — deterministic, but still varied per call.
+# arguments[0] = seed string.
+#
+# Caveat: two runs share the RNG stream only while they make identical choices;
+# once their purchases diverge (e.g. a Building Special rolls a building), the
+# streams desync. This reduces variance and guarantees an identical START, not
+# bit-identical luck forever — the trial log is what proves where they diverge.
+SEED_RNG = """
+var seed = arguments[0];
+if (typeof Math.seedrandom !== 'function') return false;
+if (!window._origSeedrandom) window._origSeedrandom = Math.seedrandom;
+window._abSeed = seed;
+window._abSeedCounter = 0;
+Math.seedrandom = function(arg) {
+    if (arg === undefined || arg === null || arg === '') {
+        window._abSeedCounter++;
+        return window._origSeedrandom(window._abSeed + '#' + window._abSeedCounter);
+    }
+    return window._origSeedrandom(arg);
+};
+// Re-key the live stream now, and pin the game's own seed.
+Math.seedrandom(seed + '#init');
+if (typeof Game !== 'undefined') Game.seed = seed;
+return true;
+"""
+
 START_AUTOCLICK_COOKIE = """
 if (window._autoClickCookie) clearInterval(window._autoClickCookie);
 window._autoClickCookie = setInterval(function() { Game.ClickCookie(); }, arguments[0]);
@@ -148,6 +179,26 @@ for (var key in Game.Objects) {
 }
 Game.CalculateGains();  // restore real CPS
 return out;
+"""
+
+# Compact state snapshot for the A/B trial log. Active buffs are included so the
+# analysis can verify two seeded runs really did get identical luck (same buffs
+# at the same times) before attributing any cookie gap to strategy.
+TRIAL_SNAPSHOT = """
+var buffs = [];
+for (var b in Game.buffs) { if (Game.buffs[b]) buffs.push(b); }
+return {
+    cookies: Game.cookies,
+    cookiesEarned: Game.cookiesEarned,
+    cookiesPs: Game.cookiesPs,
+    buildingsOwned: Game.BuildingsOwned,
+    upgradesOwned: Game.UpgradesOwned,
+    achievementsOwned: Game.AchievementsOwned,
+    prestige: Game.prestige,
+    buffs: buffs,
+    wrinklers: Game.wrinklers ? Game.wrinklers.filter(function(w){return w && w.phase==2;}).length : 0,
+    seedCounter: window._abSeedCounter || 0
+};
 """
 
 COUNT_GOLDEN_COOKIE_UPGRADES = """

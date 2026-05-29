@@ -19,6 +19,7 @@ from cookiebot.config import (
     Config,
     profile_backups_dir,
     profile_save_file,
+    profile_trials_dir,
 )
 from cookiebot.driver import build_driver, open_game, start_auto_intervals
 from cookiebot.heuristics import (
@@ -43,6 +44,7 @@ from cookiebot.persistence import (
     write_save,
 )
 from cookiebot.status import BotStatus, render as render_status
+from cookiebot.trial import TrialLogger
 
 log = logging.getLogger("cookiebot")
 
@@ -112,6 +114,7 @@ class CookieBot:
         # Cache of tier-unlock bundles (buy N buildings + the upgrade they
         # unlock), refreshed on the same slow cadence.
         self._tier_bundles: list[dict] = []
+        self._trial: TrialLogger | None = None  # set in setup() when ab_log is on
         self._console = console or Console()
         self._hotkeys = HotkeyListener(self._enqueue_key)
         self._status = BotStatus()
@@ -119,7 +122,10 @@ class CookieBot:
     def setup(self) -> None:
         migrate_legacy_save()
         log.info("using save profile %r (%s)", self.cfg.save_profile, self.save_file.name)
-        open_game(self.driver)
+        open_game(self.driver, seed=self.cfg.ab_seed)
+        if self.cfg.ab_seed:
+            log.info("A/B mode: RNG seeded with %r", self.cfg.ab_seed)
+        self._init_trial_log()
         if self.cfg.fresh:
             log.info("hard-resetting game state (fresh start)")
             self.driver.execute_script(scripts.HARD_RESET)
@@ -307,11 +313,15 @@ class CookieBot:
                 self.golden_count += 1
                 self._status.update(golden_count=self.golden_count)
             self._status.update(last_action=f"upgrade #{uid}")
+            if self._trial is not None:
+                self._trial.buy("upgrade", up.name, price, self._upgrade_marginals.get(uid, 0.0))
 
     def _buy_building(self, b: Building) -> None:
         log.info("buy building %s @ %.2f", b.name, b.price)
         self.driver.execute_script(scripts.BUY_BUILDING, b.name, 1)
         self._status.update(last_action=f"buy {b.name}")
+        if self._trial is not None:
+            self._trial.buy("building", b.name, b.price, b.heuristic)
 
     def _maybe_buy_bundle(self, bundle: dict, cookies: float, cookies_ps: float) -> None:
         cost = float(bundle["cost"])
@@ -321,6 +331,11 @@ class CookieBot:
         log.info("buy bundle: %d × %s + tier upgrade #%d (cost %.2e)", qty, name, up_id, cost)
         bought = self.driver.execute_script(scripts.BUY_TIER_BUNDLE, name, qty, up_id)
         self._status.update(last_action=f"bundle {qty}× {name} + tier")
+        if self._trial is not None:
+            self._trial.buy(
+                "bundle", f"{qty}x {name}+tier#{up_id}", cost,
+                bundle["gainCps"] / cost if cost else 0.0, float(bundle["gainCps"]),
+            )
         # Force a fresh bundle eval next slow tick; this one is consumed.
         self._tier_bundles = [b for b in self._tier_bundles if b is not bundle]
         if not bought:
@@ -374,6 +389,35 @@ class CookieBot:
         if self.cfg.auto_pop_wrinklers_in_frenzy:
             if self.driver.execute_script(scripts.POP_WRINKLERS_IF_FRENZY):
                 self._status.update(last_action="popped wrinklers (frenzy)")
+
+    def _init_trial_log(self) -> None:
+        if not self.cfg.ab_log:
+            return
+        # One log per run; the timestamp must come from the page (Date.now is
+        # blocked in this Python env) — use the profile + a counter-free name
+        # derived from the game's start. Simpler: let the OS provide it via the
+        # driver's session, falling back to a fixed name the analysis can pair.
+        stamp = self.driver.execute_script("return String(Date.now());")
+        path = profile_trials_dir(self.cfg.save_profile) / f"trial_{stamp}.jsonl"
+        self._trial = TrialLogger(path)
+        self._trial.meta(
+            profile=self.cfg.save_profile,
+            seed=self.cfg.ab_seed,
+            payback_mode=self.cfg.payback_mode,
+            lucky_reserve_seconds=self.cfg.lucky_reserve_seconds,
+            auto_ascend=self.cfg.auto_ascend,
+        )
+        log.info("A/B trial log → %s", path.name)
+
+    def trial_snapshot_tick(self) -> None:
+        if self._trial is None:
+            return
+        try:
+            snap = self.driver.execute_script(scripts.TRIAL_SNAPSHOT)
+        except Exception:
+            log.exception("trial snapshot failed")
+            return
+        self._trial.snapshot(snap)
 
     def marginals_tick(self) -> None:
         # Recompute true marginal CPS for in-store upgrades (payback mode only).
@@ -540,6 +584,8 @@ class CookieBot:
         self._sched.every(self.cfg.news_period_s, self.achievement_threshold_tick, "achievement-thresholds")
         self._sched.every(self.cfg.minigame_period_s, self.minigame_tick, "minigames")
         self._sched.every(self.cfg.save_period_s, self.save_tick, "save")
+        if self._trial is not None:
+            self._sched.every(self.cfg.ab_snapshot_period_s, self.trial_snapshot_tick, "trial-log")
         if self.cfg.payback_mode:
             # Prime the cache immediately so the first purchases use real
             # marginals, then refresh on its own cadence.
@@ -589,6 +635,8 @@ class CookieBot:
             log.info("stopping on user request")
         finally:
             self._hotkeys.stop()
+            if self._trial is not None:
+                self._trial.close()
             try:
                 write_save(self.driver, self.save_file)
             except Exception:
@@ -605,6 +653,9 @@ def _parse_args() -> tuple[Config, bool]:
     p.add_argument("--fresh", action="store_true", help="Hard-reset the game on launch")
     p.add_argument("--profile", default=None, help="Named save profile to use")
     p.add_argument("--no-menu", action="store_true", help="Skip the interactive menu")
+    p.add_argument("--ab-seed", default=None, help="Force deterministic RNG with this seed (A/B trials)")
+    p.add_argument("--ab-log", action=argparse.BooleanOptionalAction, default=None,
+                   help="Write a structured JSONL trial log to the profile's trials/ folder")
     args = p.parse_args()
 
     cfg = Config()
@@ -619,6 +670,10 @@ def _parse_args() -> tuple[Config, bool]:
         cfg.browser = args.browser
     if args.headless is not None:
         cfg.headless = args.headless
+    if args.ab_seed is not None:
+        cfg.ab_seed = args.ab_seed
+    if args.ab_log is not None:
+        cfg.ab_log = args.ab_log
     cfg.fresh = args.fresh
     return cfg, args.no_menu
 

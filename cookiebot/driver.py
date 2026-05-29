@@ -32,10 +32,13 @@ def build_driver(cfg: Config) -> webdriver.Remote:
     raise ValueError(f"Unsupported browser: {cfg.browser!r}")
 
 
-def open_game(driver: webdriver.Remote) -> None:
+def open_game(driver: webdriver.Remote, seed: str = "") -> None:
     driver.get(GAME_URL)
     _wait_for_game(driver)
     driver.execute_script(scripts.CLOSE_PROMPT)
+    if seed:
+        # Force deterministic RNG before the save loads / play begins.
+        driver.execute_script(scripts.SEED_RNG, seed)
 
 
 def _wait_for_game(driver: webdriver.Remote, timeout_s: float = 30.0) -> None:
