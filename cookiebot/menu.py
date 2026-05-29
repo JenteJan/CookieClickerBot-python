@@ -119,6 +119,16 @@ def _edit_settings(cfg: Config) -> None:
             default=cfg.auto_ascend_gain_pct,
         )
         cfg.auto_ascend_gain_pct = max(0.0, pct)
+    cfg.auto_train_dragon = Confirm.ask(
+        "Auto-train Krumblor? (some levels sacrifice 100 buildings)",
+        default=cfg.auto_train_dragon,
+    )
+    if cfg.auto_train_dragon:
+        keep = IntPrompt.ask(
+            "Keep at least how many of a building after a sacrifice?",
+            default=cfg.dragon_keep_buildings,
+        )
+        cfg.dragon_keep_buildings = max(0, keep)
     save_settings(SETTINGS_FILE, cfg)
     _console.print("  [dim]settings saved[/dim]")
 

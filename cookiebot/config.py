@@ -35,6 +35,8 @@ PERSISTABLE_FIELDS = (
     "payback_cap_minutes",
     "auto_ascend",
     "auto_ascend_gain_pct",
+    "auto_train_dragon",
+    "dragon_keep_buildings",
 )
 
 
@@ -49,6 +51,7 @@ class Config:
     minigame_period_s: float = 4.0
     save_period_s: float = 30.0
     ascend_period_s: float = 60.0
+    dragon_period_s: float = 30.0
     # Timestamped backups separate from the main save file. 0 disables backups;
     # retention of 0 days keeps them forever.
     backup_interval_hours: float = 6.0
@@ -81,3 +84,9 @@ class Config:
     # auto_ascend_gain_pct (relative to current). Heavenly chips persist unspent.
     auto_ascend: bool = False
     auto_ascend_gain_pct: float = 10.0
+    # Krumblor dragon training. Off by default. Middle dragon levels permanently
+    # SACRIFICE 100 of a building; the guard only allows such a level when that
+    # building's count stays ≥ dragon_keep_buildings after the sacrifice.
+    # Requires the "How to bake your dragon" heavenly upgrade.
+    auto_train_dragon: bool = False
+    dragon_keep_buildings: int = 100

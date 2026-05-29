@@ -297,6 +297,15 @@ class CookieBot:
         if path is not None:
             self._status.update(last_action=f"backup → {path.name}")
 
+    def dragon_tick(self) -> None:
+        info = self.driver.execute_script(scripts.DRAGON_TRAIN, self.cfg.dragon_keep_buildings)
+        if info.get("trained"):
+            log.info("dragon leveled to %s (%s)", info.get("level"), info.get("name"))
+            self._status.update(last_action=f"dragon → {info.get('name')}")
+        elif info.get("blocked"):
+            log.info("dragon level held: needs %d %s to sacrifice safely",
+                     info.get("need"), info.get("building"))
+
     def ascend_tick(self) -> None:
         info = self.driver.execute_script(scripts.ASCEND_INFO)
         prestige = float(info["prestige"])
@@ -431,6 +440,10 @@ class CookieBot:
         if self.cfg.auto_ascend:
             self._sched.every(self.cfg.ascend_period_s, self.ascend_tick, "ascend", delay_first=True)
             log.info("auto-ascend on (≥%.0f%% prestige gain)", self.cfg.auto_ascend_gain_pct)
+        if self.cfg.auto_train_dragon:
+            self._sched.every(self.cfg.dragon_period_s, self.dragon_tick, "dragon", delay_first=True)
+            log.info("auto-train dragon on (keep ≥%d of any sacrificed building)",
+                     self.cfg.dragon_keep_buildings)
         hotkeys_active = self._hotkeys.start()
         if not hotkeys_active:
             log.info("hotkeys unavailable (not a TTY); use ctrl-c to stop")

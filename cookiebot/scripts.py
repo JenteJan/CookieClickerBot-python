@@ -224,6 +224,33 @@ for (var i = 0; i < bank.goodsById.length; i++) {
 }
 """
 
+# Level up Krumblor one step if it's affordable and safe. Middle levels call
+# Game.Objects[name].sacrifice(100) (permanent), detected by inspecting the
+# level's buy() source; such a level is only taken when the building keeps at
+# least arguments[0] units after the sacrifice. Requires the dragon to be
+# unlocked. Returns a small status object.
+DRAGON_TRAIN = """
+var keep = arguments[0];
+if (!Game.Has || !Game.Has('How to bake your dragon')) return {locked: true};
+var levels = Game.dragonLevels;
+var lvl = Game.dragonLevel;
+if (!levels || lvl >= levels.length - 1) return {maxed: true, level: lvl};
+var me = levels[lvl];
+if (!me.cost()) return {waiting: true, level: lvl, name: me.name};
+var buyStr = me.buy.toString();
+if (buyStr.indexOf('sacrifice') >= 0) {
+    var m = buyStr.match(/Objects\\['([^']+)'\\]\\.sacrifice\\((\\d+)\\)/);
+    if (m) {
+        var bname = m[1], n = parseInt(m[2]);
+        if (Game.Objects[bname].amount < keep + n) {
+            return {blocked: true, level: lvl, name: me.name, building: bname, need: keep + n};
+        }
+    }
+}
+Game.UpgradeDragon();
+return {trained: true, level: Game.dragonLevel, name: me.name};
+"""
+
 ASCEND_INFO = """
 return {
     prestige: Game.prestige,
