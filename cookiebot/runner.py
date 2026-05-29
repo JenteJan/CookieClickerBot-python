@@ -15,6 +15,8 @@ from rich.panel import Panel
 
 from cookiebot import achievements, scripts
 from cookiebot.config import (
+    AUTOCLICK_COOKIE_MS,
+    AUTOCLICK_GOLDEN_MS,
     GOLDEN_COOKIE_UPGRADE_NAMES,
     Config,
     profile_backups_dir,
