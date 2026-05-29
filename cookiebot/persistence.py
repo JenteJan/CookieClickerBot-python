@@ -63,7 +63,9 @@ def write_save(driver, path: Path) -> None:
         except OSError:
             pass
         raise
-    log.info("saved game to %s (%d bytes)", path.name, len(data))
+    # Debug-level: the routine 30s autosave fires constantly. Manual saves (the
+    # 's' hotkey) and backups still log at INFO from their own call sites.
+    log.debug("saved game to %s (%d bytes)", path.name, len(data))
 
 
 def backup_save(path: Path) -> Path | None:
