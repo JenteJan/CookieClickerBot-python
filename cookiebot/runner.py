@@ -109,6 +109,9 @@ class CookieBot:
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
         self._upgrade_marginals: dict[int, float] = {}
+        # Cache of tier-unlock bundles (buy N buildings + the upgrade they
+        # unlock), refreshed on the same slow cadence.
+        self._tier_bundles: list[dict] = []
         self._console = console or Console()
         self._hotkeys = HotkeyListener(self._enqueue_key)
         self._status = BotStatus()
@@ -230,6 +233,16 @@ class CookieBot:
         ]
         best_upgrade = max(scored_upgrades, key=lambda x: x[1], default=(None, 0.0))
 
+        # Best tier-unlock bundle (buy N buildings + the upgrade they unlock),
+        # scored as combined gain / combined cost so it competes head-to-head.
+        best_bundle = None
+        best_bundle_score = 0.0
+        for bd in self._tier_bundles:
+            if bd["cost"] > 0 and bd["gainCps"] > 0:
+                sc = bd["gainCps"] / bd["cost"]
+                if sc > best_bundle_score:
+                    best_bundle, best_bundle_score = bd, sc
+
         self._update_next_buys(cookies, buildings, scored_upgrades, store_prices)
 
         # Optional payback ceiling: skip anything slower to pay off than the cap.
@@ -238,10 +251,16 @@ class CookieBot:
         if self.cfg.payback_mode and self.cfg.payback_cap_minutes > 0:
             min_score = 1.0 / (self.cfg.payback_cap_minutes * 60)
 
-        if best_upgrade[1] > building_score(best_building) and best_upgrade[0] is not None:
+        building_best_score = building_score(best_building)
+        # Pick the single best action among building / upgrade / bundle.
+        if best_bundle is not None and best_bundle_score >= max(
+            building_best_score, best_upgrade[1], min_score
+        ):
+            self._maybe_buy_bundle(best_bundle, cookies, cookies_ps)
+        elif best_upgrade[1] > building_best_score and best_upgrade[0] is not None:
             if best_upgrade[1] >= min_score:
                 self._maybe_buy_upgrade(best_upgrade[0], cookies, cookies_ps, store_prices[best_upgrade[0]])
-        elif building_score(best_building) >= min_score:
+        elif building_best_score >= min_score:
             self._maybe_buy_building(best_building, cookies, cookies_ps)
 
     def _update_next_buys(
@@ -293,6 +312,19 @@ class CookieBot:
         log.info("buy building %s @ %.2f", b.name, b.price)
         self.driver.execute_script(scripts.BUY_BUILDING, b.name, 1)
         self._status.update(last_action=f"buy {b.name}")
+
+    def _maybe_buy_bundle(self, bundle: dict, cookies: float, cookies_ps: float) -> None:
+        cost = float(bundle["cost"])
+        if not self._affordable_with_reserve(cookies, cookies_ps, cost):
+            return
+        name, qty, up_id = bundle["building"], int(bundle["qty"]), int(bundle["upgradeId"])
+        log.info("buy bundle: %d × %s + tier upgrade #%d (cost %.2e)", qty, name, up_id, cost)
+        bought = self.driver.execute_script(scripts.BUY_TIER_BUNDLE, name, qty, up_id)
+        self._status.update(last_action=f"bundle {qty}× {name} + tier")
+        # Force a fresh bundle eval next slow tick; this one is consumed.
+        self._tier_bundles = [b for b in self._tier_bundles if b is not bundle]
+        if not bought:
+            log.info("bundle upgrade #%d didn't apply (locked?)", up_id)
 
     def lucky_tick(self) -> None:
         self.driver.execute_script(scripts.GET_LUCKY)
@@ -349,6 +381,16 @@ class CookieBot:
             return
         deltas = result.get("deltas", {}) if result else {}
         self._upgrade_marginals = {int(k): float(v) for k, v in deltas.items()}
+
+        # Refresh tier-unlock bundles on the same cadence (both use the costly
+        # CalculateGains, both feed the purchase tick from a cache).
+        try:
+            self._tier_bundles = self.driver.execute_script(
+                scripts.EVALUATE_TIER_BUNDLES, self.cfg.achievement_max_step
+            ) or []
+        except Exception:
+            log.exception("tier-bundle evaluation failed")
+            self._tier_bundles = []
 
     def save_tick(self) -> None:
         self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS)

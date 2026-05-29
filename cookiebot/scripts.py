@@ -93,6 +93,63 @@ Game.CalculateGains();
 return {base: base, deltas: out};
 """
 
+# "Tier unlock bundles": a tiered building upgrade (each ~2x that building's
+# output) only becomes purchasable once you own Game.Tiers[tier].unlock of the
+# building. This evaluates, per building, the nearest LOCKED tiered upgrade
+# reachable within maxStep buildings, and treats "buy the missing buildings +
+# the unlocked upgrade" as one bundle: combined cost and combined true CPS gain
+# (bump amount, flag the upgrade bought, CalculateGains, revert). The runner
+# scores the bundle by gain/cost so it competes with single buys.
+#
+# Returns a list of:
+#   {building, upgradeId, qty, cost, gainCps}
+# where qty buildings + upgrade upgradeId are bought together.
+EVALUATE_TIER_BUNDLES = """
+var maxStep = arguments[0];
+var base = Game.cookiesPs;
+var out = [];
+
+for (var key in Game.Objects) {
+    var b = Game.Objects[key];
+    // nearest locked tiered upgrade within reach
+    var best = null;
+    for (var tier in b.tieredUpgrades) {
+        var up = b.tieredUpgrades[tier];
+        if (!up || up.bought || up.unlocked) continue;  // only still-locked tiers
+        var need = Game.Tiers[tier] ? Game.Tiers[tier].unlock : -1;
+        if (need == null || need < 0) continue;
+        var qty = need - b.amount;
+        if (qty < 0) qty = 0;                 // threshold already met, just locked-by-order
+        if (qty > maxStep) continue;
+        if (best === null || qty < best.qty) best = {up: up, qty: qty, need: need};
+    }
+    if (best === null) continue;
+
+    var buildingCost = best.qty > 0 ? b.getSumPrice(best.qty) : 0;
+    var upCost = (best.up.getPrice ? best.up.getPrice() : best.up.basePrice);
+    var cost = buildingCost + upCost;
+
+    // Combined true CPS gain: amount += qty AND upgrade bought, then recompute.
+    var amt = b.amount, was = best.up.bought, gain = 0;
+    try {
+        b.amount = amt + best.qty;
+        best.up.bought = 1;
+        Game.CalculateGains();
+        gain = Game.cookiesPs - base;
+    } catch (e) {
+        gain = 0;
+    } finally {
+        b.amount = amt;
+        best.up.bought = was;
+    }
+
+    out.push({building: b.name, upgradeId: best.up.id, qty: best.qty,
+              cost: cost, gainCps: gain});
+}
+Game.CalculateGains();  // restore real CPS
+return out;
+"""
+
 COUNT_GOLDEN_COOKIE_UPGRADES = """
 var names = arguments[0];
 var total = 0;
@@ -111,6 +168,17 @@ BUY_BUILDING = "Game.Objects[arguments[0]].buy(arguments[1]);"
 # buy(1) is exactly what the game's own "Yes" button calls, so it purchases
 # directly with no modal.
 BUY_UPGRADE = "Game.UpgradesById[arguments[0]].buy(1);"
+
+# Buy a tier-unlock bundle atomically: the qty buildings first (which unlocks
+# the tiered upgrade via the game's own UnlockTiered hook), then the upgrade.
+# args: building name, qty, upgrade id.
+BUY_TIER_BUNDLE = """
+var name = arguments[0], qty = arguments[1], upId = arguments[2];
+if (qty > 0) Game.Objects[name].buy(qty);
+var up = Game.UpgradesById[upId];
+if (up && up.unlocked && !up.bought) up.buy(1);
+return up ? (up.bought == 1) : false;
+"""
 
 # Click the news ticker iff a clickable fortune is currently showing.
 # Gated on the 'Fortune cookies' heavenly upgrade — without it the game can't
