@@ -12,11 +12,16 @@ from pathlib import Path
 
 from cookiebot import scripts
 from cookiebot.config import (
+    ARCHIVES_DIR,
+    DEFAULT_PROFILE,
     LEGACY_SAVE_FILE,
     PERSISTABLE_FIELDS,
+    PROFILES_DIR,
     SAVE_FILE,
     SAVES_DIR,
     Config,
+    profile_save_file,
+    sanitize_profile,
 )
 
 log = logging.getLogger(__name__)
@@ -26,11 +31,95 @@ _BACKUP_TS_FMT = "%Y-%m-%d_%H%M%S"
 
 
 def migrate_legacy_save() -> None:
-    """One-time move of a pre-existing root-level save into ``saves/``."""
+    """One-time moves of pre-existing saves into the current layout:
+    root-level file → saves/, then saves/ single file → profiles/default.txt."""
     SAVES_DIR.mkdir(parents=True, exist_ok=True)
+    PROFILES_DIR.mkdir(parents=True, exist_ok=True)
     if LEGACY_SAVE_FILE.exists() and not SAVE_FILE.exists():
         os.replace(LEGACY_SAVE_FILE, SAVE_FILE)
         log.info("migrated %s → %s", LEGACY_SAVE_FILE.name, SAVE_FILE.relative_to(SAVES_DIR.parent))
+    default_profile = profile_save_file(DEFAULT_PROFILE)
+    if SAVE_FILE.exists() and not default_profile.exists():
+        os.replace(SAVE_FILE, default_profile)
+        log.info("migrated save → profile %r", DEFAULT_PROFILE)
+
+
+# ---- named save profiles --------------------------------------------------
+
+
+def list_profiles() -> list[str]:
+    """Names of existing profiles, alphabetical, default first."""
+    if not PROFILES_DIR.exists():
+        return []
+    names = sorted(p.stem for p in PROFILES_DIR.glob("*.txt"))
+    if DEFAULT_PROFILE in names:
+        names.remove(DEFAULT_PROFILE)
+        names.insert(0, DEFAULT_PROFILE)
+    return names
+
+
+def profile_exists(name: str) -> bool:
+    return profile_save_file(name).exists()
+
+
+def create_profile(name: str, copy_from: str | None = None) -> str:
+    """Create a profile file (empty, or copied from another). Returns the
+    sanitized name actually used."""
+    name = sanitize_profile(name)
+    dest = profile_save_file(name)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        return name
+    if copy_from and profile_exists(copy_from):
+        dest.write_text(profile_save_file(copy_from).read_text())
+    else:
+        dest.write_text("")
+    log.info("created profile %r%s", name, f" from {copy_from!r}" if copy_from else "")
+    return name
+
+
+def delete_profile(name: str) -> bool:
+    """Delete a profile's save file. The default profile cannot be deleted."""
+    name = sanitize_profile(name)
+    if name == DEFAULT_PROFILE:
+        return False
+    path = profile_save_file(name)
+    if path.exists():
+        path.unlink()
+        log.info("deleted profile %r", name)
+        return True
+    return False
+
+
+def archive_profile(name: str) -> Path | None:
+    """Copy a profile's current save to a timestamped archive. Returns the path,
+    or None if there's nothing to archive."""
+    src = profile_save_file(name)
+    if not src.exists() or src.stat().st_size == 0:
+        return None
+    ARCHIVES_DIR.mkdir(parents=True, exist_ok=True)
+    ts = _dt.datetime.now().strftime(_BACKUP_TS_FMT)
+    dest = ARCHIVES_DIR / f"{sanitize_profile(name)}_{ts}.txt"
+    dest.write_text(src.read_text())
+    log.info("archived profile %r → %s", name, dest.name)
+    return dest
+
+
+def list_archives(name: str | None = None) -> list[Path]:
+    """Archived saves, newest first; optionally filtered to one profile."""
+    if not ARCHIVES_DIR.exists():
+        return []
+    prefix = f"{sanitize_profile(name)}_" if name else ""
+    files = [p for p in ARCHIVES_DIR.glob(f"{prefix}*.txt")]
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def restore_archive(archive: Path, profile: str) -> None:
+    """Overwrite a profile's save with an archived copy."""
+    dest = profile_save_file(profile)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(archive.read_text())
+    log.info("restored %s → profile %r", archive.name, profile)
 
 
 def load_save(driver, path: Path) -> bool:

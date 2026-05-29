@@ -57,11 +57,27 @@ ticks. The in-page auto-clicker and golden-cookie popper keep running
 
 ## Save files
 
-Saves live in `saves/CookieAISaveData.txt` (gitignored). To import an
-existing save, export it from the game and paste its contents into that
-file before starting. Restart the bot after editing the save or after
-prestiging. "New game" in the menu renames the current save to
-`saves/CookieAISaveData.txt.bak` before starting fresh.
+Each save is a named **profile** stored at `saves/profiles/<name>.txt`
+(gitignored). The bot loads and saves the active profile; the default is
+`default`. To import an existing save, export it from the game and paste its
+contents into the profile file before starting. Restart the bot after editing
+a save or after prestiging.
+
+### Profiles (A/B testing)
+
+The menu's **Save profiles** screen lets you create, switch, restore, and
+delete named profiles. Use `--profile <name>` to pick one from the CLI. To
+compare two strategies side by side, run two instances with different
+profiles and browsers:
+
+```sh
+python cookieBot.py --profile aggressive --no-menu
+python cookieBot.py --profile conservative --browser chrome --no-menu
+```
+
+"New game" archives the current profile's save to
+`saves/archives/<profile>_<timestamp>.txt` before resetting, and the Save
+profiles screen can restore any archive.
 
 ### Backups
 

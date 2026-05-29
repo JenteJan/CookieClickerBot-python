@@ -7,8 +7,24 @@ from rich.prompt import Confirm, FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
 from cookiebot import achievements
-from cookiebot.config import SAVE_FILE, SETTINGS_FILE, Config
-from cookiebot.persistence import backup_save, save_info, save_settings
+from cookiebot.config import (
+    DEFAULT_PROFILE,
+    SETTINGS_FILE,
+    Config,
+    profile_save_file,
+    sanitize_profile,
+)
+from cookiebot.persistence import (
+    archive_profile,
+    create_profile,
+    delete_profile,
+    list_archives,
+    list_profiles,
+    profile_exists,
+    restore_archive,
+    save_info,
+    save_settings,
+)
 
 _console = Console()
 
@@ -19,7 +35,7 @@ def show_menu(cfg: Config) -> Config | None:
         _render(cfg)
         choice = Prompt.ask(
             "[bold]Choose[/bold]",
-            choices=["1", "2", "3", "4", "5"],
+            choices=["1", "2", "3", "4", "5", "6"],
             default="1",
             show_choices=False,
         )
@@ -33,6 +49,8 @@ def show_menu(cfg: Config) -> Config | None:
         elif choice == "4":
             _bonus_achievements(cfg)
         elif choice == "5":
+            _save_profiles(cfg)
+        elif choice == "6":
             return None
 
 
@@ -42,7 +60,7 @@ def _render(cfg: Config) -> None:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="dim")
     table.add_column()
-    table.add_row("Save file", save_info(SAVE_FILE))
+    table.add_row("Profile", f"{cfg.save_profile}  ({save_info(profile_save_file(cfg.save_profile))})")
     table.add_row("Browser", cfg.browser)
     table.add_row("Headless", "yes" if cfg.headless else "no")
     table.add_row("Start mode", "[red]fresh game[/red]" if cfg.fresh else "continue save")
@@ -53,24 +71,26 @@ def _render(cfg: Config) -> None:
     _console.print(table)
     _console.print()
     _console.print("  [bold]1[/bold])  Start")
-    _console.print("  [bold]2[/bold])  New game (back up save, hard-reset in browser)")
+    _console.print("  [bold]2[/bold])  New game (archive save, hard-reset in browser)")
     _console.print("  [bold]3[/bold])  Settings")
     _console.print("  [bold]4[/bold])  Bonus achievements")
-    _console.print("  [bold]5[/bold])  Quit")
+    _console.print("  [bold]5[/bold])  Save profiles")
+    _console.print("  [bold]6[/bold])  Quit")
     _console.print()
 
 
 def _confirm_new_game(cfg: Config) -> bool:
     if not Confirm.ask(
-        "[red]Start a fresh game? Current save will be backed up.[/red]",
+        f"[red]Start a fresh game on profile '{cfg.save_profile}'? "
+        f"Current save will be archived.[/red]",
         default=False,
     ):
         return False
-    backup = backup_save(SAVE_FILE)
-    if backup:
-        _console.print(f"  backed up save → [cyan]{backup.name}[/cyan]")
+    archived = archive_profile(cfg.save_profile)
+    if archived:
+        _console.print(f"  archived save → [cyan]{archived.name}[/cyan]")
     else:
-        _console.print("  no existing save to back up")
+        _console.print("  no existing save to archive")
     cfg.fresh = True
     return True
 
@@ -154,6 +174,102 @@ def _format_auto_achievements(cfg: Config) -> str:
     if cfg.auto_fire_risky_achievements:
         parts.append("[red]risky[/red]")
     return ", ".join(parts) if parts else "[dim]off[/dim]"
+
+
+def _save_profiles(cfg: Config) -> None:
+    """Manage named save profiles: switch, create, restore, delete."""
+    # Make sure the active profile has a file so it shows in the list.
+    if not profile_exists(cfg.save_profile):
+        create_profile(cfg.save_profile)
+    while True:
+        _console.print()
+        _console.print(Panel.fit("Save profiles", style="bold yellow"))
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("#", style="dim", justify="right")
+        table.add_column("Profile")
+        table.add_column("Save")
+        profiles = list_profiles()
+        for i, name in enumerate(profiles, 1):
+            active = " [green](active)[/green]" if name == cfg.save_profile else ""
+            table.add_row(str(i), name + active, save_info(profile_save_file(name)))
+        _console.print(table)
+        _console.print()
+        _console.print("  [bold]s[/bold]) switch   [bold]n[/bold]) new   "
+                       "[bold]r[/bold]) restore archive   [bold]d[/bold]) delete   "
+                       "[bold]b[/bold]) back")
+        action = Prompt.ask("Choose", choices=["s", "n", "r", "d", "b"], default="b")
+        if action == "b":
+            return
+        if action == "s":
+            _switch_profile(cfg, profiles)
+        elif action == "n":
+            _new_profile(cfg)
+        elif action == "r":
+            _restore_archive(cfg)
+        elif action == "d":
+            _delete_profile(cfg, profiles)
+
+
+def _switch_profile(cfg: Config, profiles: list[str]) -> None:
+    name = Prompt.ask("Switch to which profile?", choices=profiles, default=cfg.save_profile)
+    cfg.save_profile = name
+    save_settings(SETTINGS_FILE, cfg)
+    _console.print(f"  active profile → [green]{name}[/green]")
+
+
+def _new_profile(cfg: Config) -> None:
+    raw = Prompt.ask("New profile name")
+    name = sanitize_profile(raw)
+    if profile_exists(name):
+        _console.print(f"  [red]profile '{name}' already exists[/red]")
+        return
+    copy = None
+    if Confirm.ask(f"Copy current profile '{cfg.save_profile}' into '{name}'?", default=False):
+        copy = cfg.save_profile
+    create_profile(name, copy_from=copy)
+    if Confirm.ask(f"Switch to '{name}' now?", default=True):
+        cfg.save_profile = name
+        save_settings(SETTINGS_FILE, cfg)
+    _console.print(f"  created [green]{name}[/green]")
+
+
+def _restore_archive(cfg: Config) -> None:
+    archives = list_archives(cfg.save_profile)
+    if not archives:
+        _console.print(f"  [dim]no archives for '{cfg.save_profile}'[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Archive")
+    table.add_column("Size")
+    for i, a in enumerate(archives[:20], 1):
+        table.add_row(str(i), a.name, f"{a.stat().st_size:,} B")
+    _console.print(table)
+    idx = IntPrompt.ask("Restore which # (0 = cancel)", default=0)
+    if idx < 1 or idx > len(archives):
+        return
+    chosen = archives[idx - 1]
+    if Confirm.ask(
+        f"[red]Overwrite profile '{cfg.save_profile}' with {chosen.name}?[/red]",
+        default=False,
+    ):
+        restore_archive(chosen, cfg.save_profile)
+        _console.print(f"  restored [green]{chosen.name}[/green]")
+
+
+def _delete_profile(cfg: Config, profiles: list[str]) -> None:
+    deletable = [p for p in profiles if p != DEFAULT_PROFILE]
+    if not deletable:
+        _console.print("  [dim]only the default profile exists[/dim]")
+        return
+    name = Prompt.ask("Delete which profile?", choices=deletable)
+    if not Confirm.ask(f"[red]Permanently delete profile '{name}'?[/red]", default=False):
+        return
+    delete_profile(name)
+    if cfg.save_profile == name:
+        cfg.save_profile = DEFAULT_PROFILE
+        save_settings(SETTINGS_FILE, cfg)
+    _console.print(f"  deleted [green]{name}[/green]")
 
 
 def _bonus_achievements(cfg: Config) -> None:

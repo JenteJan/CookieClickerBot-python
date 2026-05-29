@@ -17,9 +17,9 @@ from cookiebot import achievements, scripts
 from cookiebot.config import (
     BACKUPS_DIR,
     GOLDEN_COOKIE_UPGRADE_IDS,
-    SAVE_FILE,
     SETTINGS_FILE,
     Config,
+    profile_save_file,
 )
 from cookiebot.driver import build_driver, open_game, start_auto_intervals
 from cookiebot.heuristics import (
@@ -96,6 +96,7 @@ class CookieBot:
 
     def __init__(self, cfg: Config, console: Console | None = None) -> None:
         self.cfg = cfg
+        self.save_file = profile_save_file(cfg.save_profile)
         self.driver = build_driver(cfg)
         self.upgrades_by_id: dict[int, Upgrade] = {}
         self.golden_count: int = 0
@@ -109,12 +110,13 @@ class CookieBot:
 
     def setup(self) -> None:
         migrate_legacy_save()
+        log.info("using save profile %r (%s)", self.cfg.save_profile, self.save_file.name)
         open_game(self.driver)
         if self.cfg.fresh:
             log.info("hard-resetting game state (fresh start)")
             self.driver.execute_script(scripts.HARD_RESET)
         else:
-            load_save(self.driver, SAVE_FILE)
+            load_save(self.driver, self.save_file)
         start_auto_intervals(self.driver)
         self._load_upgrade_catalog()
         self.golden_count = int(self.driver.execute_script(
@@ -290,7 +292,7 @@ class CookieBot:
 
     def save_tick(self) -> None:
         self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS)
-        write_save(self.driver, SAVE_FILE)
+        write_save(self.driver, self.save_file)
         self._refresh_achievement_count()
 
     def backup_tick(self) -> None:
@@ -326,7 +328,7 @@ class CookieBot:
         log.info("auto-ascend: prestige %.0f → %.0f (+%.0f, %.1f%%)",
                  prestige, potential, gain, gain_pct)
         # Save before the reset so a crash mid-ascension can't lose progress.
-        write_save(self.driver, SAVE_FILE)
+        write_save(self.driver, self.save_file)
         self.driver.execute_script(scripts.DO_ASCEND)
         self._status.update(last_action=f"ascended (+{gain:.0f} prestige)")
 
@@ -401,7 +403,7 @@ class CookieBot:
 
     def _do_save_now(self) -> None:
         log.info("manual save")
-        write_save(self.driver, SAVE_FILE)
+        write_save(self.driver, self.save_file)
         self._status.update(last_action="manual save")
 
     def _do_pop_wrinklers_now(self) -> None:
@@ -474,7 +476,7 @@ class CookieBot:
         finally:
             self._hotkeys.stop()
             try:
-                write_save(self.driver, SAVE_FILE)
+                write_save(self.driver, self.save_file)
             except Exception:
                 log.exception("final save failed")
             self.driver.quit()
@@ -487,6 +489,7 @@ def _parse_args() -> tuple[Config, bool]:
     p.add_argument("--browser", default=None, choices=("firefox", "chrome"))
     p.add_argument("--headless", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--fresh", action="store_true", help="Hard-reset the game on launch")
+    p.add_argument("--profile", default=None, help="Named save profile to use")
     p.add_argument("--no-menu", action="store_true", help="Skip the interactive menu")
     args = p.parse_args()
 
@@ -496,6 +499,8 @@ def _parse_args() -> tuple[Config, bool]:
         cfg.browser = args.browser
     if args.headless is not None:
         cfg.headless = args.headless
+    if args.profile is not None:
+        cfg.save_profile = args.profile
     cfg.fresh = args.fresh
     return cfg, args.no_menu
 
@@ -509,6 +514,8 @@ def main() -> None:
         handlers=[RichHandler(console=console, show_path=False, markup=True, rich_tracebacks=True)],
     )
     cfg, no_menu = _parse_args()
+    # Migrate old saves into the profile layout before the menu lists profiles.
+    migrate_legacy_save()
     if not no_menu:
         from cookiebot.menu import show_menu
         result = show_menu(cfg)

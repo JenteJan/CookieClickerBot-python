@@ -6,10 +6,27 @@ GAME_URL = "https://orteil.dashnet.org/cookieclicker/"
 # Saves live in a dedicated gitignored folder next to the package.
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SAVES_DIR = PROJECT_DIR / "saves"
+# Named save profiles (one file per profile) enable A/B testing different
+# strategies side by side and restoring earlier states.
+PROFILES_DIR = SAVES_DIR / "profiles"
+ARCHIVES_DIR = SAVES_DIR / "archives"
+DEFAULT_PROFILE = "default"
+# Pre-profiles locations, kept for one-time migration.
 SAVE_FILE = SAVES_DIR / "CookieAISaveData.txt"
 LEGACY_SAVE_FILE = PROJECT_DIR / "CookieAISaveData.txt"
 BACKUPS_DIR = SAVES_DIR / "backups"
 SETTINGS_FILE = SAVES_DIR / "settings.json"
+
+
+def sanitize_profile(name: str) -> str:
+    """Reduce a profile name to a safe filename stem. Falls back to the default."""
+    cleaned = "".join(c for c in (name or "").strip() if c.isalnum() or c in " -_").strip()
+    return cleaned or DEFAULT_PROFILE
+
+
+def profile_save_file(name: str) -> Path:
+    """Path to a named profile's save file."""
+    return PROFILES_DIR / f"{sanitize_profile(name)}.txt"
 
 OBJECT_NAMES = [
     "Cursor", "Grandma", "Farm", "Mine", "Factory", "Bank", "Temple",
@@ -23,6 +40,7 @@ AUTOCLICK_GOLDEN_MS = 1000
 
 
 PERSISTABLE_FIELDS = (
+    "save_profile",
     "browser",
     "headless",
     "backup_interval_hours",
@@ -42,6 +60,8 @@ PERSISTABLE_FIELDS = (
 
 @dataclass
 class Config:
+    # Active named save profile. The bot loads/saves this profile's file.
+    save_profile: str = DEFAULT_PROFILE
     browser: str = "firefox"
     headless: bool = False
     fresh: bool = False  # Hard-reset the game on launch (skips loading the save).
