@@ -108,6 +108,12 @@ class Config:
     marginals_period_s: float = 5.0  # payback-mode upgrade re-evaluation cadence
     ascend_period_s: float = 60.0
     dragon_period_s: float = 30.0
+    # Building-count achievements. Only rush one that's within this many
+    # buildings of the current count, and only if its milk/CPS gain pays the
+    # purchase back within the cap. (Achievements persist across ascension, so
+    # already-won ones are skipped automatically.)
+    achievement_max_step: int = 50
+    achievement_payback_cap_s: float = 1200.0  # 20 min of CPS
     # Timestamped backups separate from the main save file. 0 disables backups;
     # retention of 0 days keeps them forever.
     backup_interval_hours: float = 6.0

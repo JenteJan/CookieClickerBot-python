@@ -302,11 +302,31 @@ class CookieBot:
         if self.driver.execute_script(scripts.CLICK_TICKER_FORTUNE_IF_PRESENT):
             log.info("clicked ticker fortune")
             self._status.update(last_action="clicked ticker fortune")
-        targets = self.driver.execute_script(scripts.CALCULATE_ACHIEVEMENT_BUILDINGS) or []
-        for name, qty in targets:
-            log.info("buy %d × %s (achievement)", qty, name)
+
+        snap = self.driver.execute_script(scripts.GAME_SNAPSHOT)
+        cookies = float(snap["cookies"])
+        cookies_ps = float(snap["cookiesPs"])
+        targets = self.driver.execute_script(
+            scripts.EVALUATE_ACHIEVEMENT_BUILDINGS, self.cfg.achievement_max_step
+        ) or []
+
+        for t in targets:
+            name, qty, cost, gain = t["name"], int(t["qty"]), float(t["cost"]), float(t["gainCps"])
+            # Worth it only if the achievement's CPS gain pays back within the
+            # configured window, AND we can afford it without dipping into the
+            # Lucky reserve. This drops the old blanket "under 10 s of CPS" rule
+            # that ignored whether the achievement was already won or valuable.
+            if gain <= 0 or cost <= 0:
+                continue
+            payback_s = cost / gain
+            if payback_s > self.cfg.achievement_payback_cap_s:
+                continue
+            if not self._affordable_with_reserve(cookies, cookies_ps, cost):
+                continue
+            log.info("buy %d × %s (achievement, payback %.0fs)", qty, name, payback_s)
             self.driver.execute_script(scripts.BUY_BUILDING, name, qty)
-            self._status.update(last_action=f"buy {qty}× {name}")
+            self._status.update(last_action=f"buy {qty}× {name} (achiev)")
+            cookies -= cost  # keep the running tally honest for the next target
 
     def minigame_tick(self) -> None:
         self.driver.execute_script(scripts.FARM_SUGAR_LUMPS)

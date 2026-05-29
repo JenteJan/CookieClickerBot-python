@@ -127,19 +127,54 @@ if (Game.TickerEffect && Game.TickerEffect.type === 'fortune') {
 return false;
 """
 
-CALCULATE_ACHIEVEMENT_BUILDINGS = """
-var achievementList = [1, 15, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 600, 650, 700, 800, 900, 1000];
-return Object.values(Game.Objects).map(function(b) {
-    for (var i = 0; i < achievementList.length; i++) {
-        var diff = achievementList[i] - b.amount;
-        if (diff > 0 && diff < 51) {
-            if (b.getSumPrice(diff) < Game.cookiesPs * 10) {
-                return [b.name, diff];
-            }
-        }
+# Find building-count achievements worth rushing toward. For each building we
+# look at its UNWON tiered achievements (building.tieredAchievs → the count is
+# Game.Tiers[tier].achievUnlock), pick the nearest reachable one, and quantify
+# the actual gain of crossing it.
+#
+# Achievements raise milk (Game.milkProgress = AchievementsOwned/25), which
+# multiplies CPS through kitten upgrades — so the true value is measured with
+# the game's own CalculateGains() (bump AchievementsOwned, recompute, revert),
+# exactly like upgrade marginals. Buildings reset on ascension but achievements
+# persist, so already-won ones are skipped (the old code re-rushed them every
+# run for zero gain) and hardcoded thresholds are gone (they were partly wrong).
+#
+# Returns, per actionable building:
+#   {name, qty, cost, gainCps}  — buy `qty` more to cross an unwon achievement.
+EVALUATE_ACHIEVEMENT_BUILDINGS = """
+var maxStep = arguments[0];   // don't chase achievements more than this many away
+var baseCps = Game.cookiesPs;
+var out = [];
+
+for (var key in Game.Objects) {
+    var b = Game.Objects[key];
+    // nearest unwon tiered achievement for this building
+    var bestQty = 0, bestCount = 0;
+    for (var tier in b.tieredAchievs) {
+        var ach = b.tieredAchievs[tier];
+        if (!ach || ach.won) continue;
+        var need = Game.Tiers[tier] ? Game.Tiers[tier].achievUnlock : 0;
+        if (!need) continue;
+        var qty = need - b.amount;
+        if (qty <= 0 || qty > maxStep) continue;
+        if (bestQty === 0 || qty < bestQty) { bestQty = qty; bestCount = need; }
     }
-    return null;
-}).filter(function(x) { return x !== null; });
+    if (bestQty === 0) continue;
+
+    var cost = b.getSumPrice(bestQty);
+
+    // True CPS gain from the +1 achievement this purchase would unlock.
+    var owned = Game.AchievementsOwned;
+    Game.AchievementsOwned = owned + 1;
+    var gain = 0;
+    try { Game.CalculateGains(); gain = Game.cookiesPs - baseCps; }
+    catch (e) { gain = 0; }
+    finally { Game.AchievementsOwned = owned; }
+
+    out.push({name: b.name, qty: bestQty, cost: cost, gainCps: gain});
+}
+Game.CalculateGains();  // restore real CPS
+return out;
 """
 
 PLANT_CLOVERS = """
