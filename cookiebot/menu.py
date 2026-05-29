@@ -8,6 +8,7 @@ from rich.table import Table
 
 from cookiebot import achievements
 from cookiebot.config import (
+    AB_TESTABLE_FIELDS,
     DEFAULT_PROFILE,
     Config,
     profile_save_file,
@@ -412,10 +413,9 @@ def _bonus_achievements(cfg: Config) -> None:
     _console.print(f"  [dim]settings saved for profile '{cfg.save_profile}'[/dim]")
 
 
-def _pick_profile_for_ab(prompt: str, default: str | None) -> str:
-    """Choose (or create) a profile for one side of an A/B test."""
+def _pick_source_profile() -> str | None:
+    """Choose the single profile whose save both A/B sides will start from."""
     profiles = list_profiles()
-    _console.print()
     table = Table(show_header=True, header_style="bold")
     table.add_column("#", style="dim", justify="right")
     table.add_column("Profile")
@@ -423,58 +423,82 @@ def _pick_profile_for_ab(prompt: str, default: str | None) -> str:
     for i, name in enumerate(profiles, 1):
         table.add_row(str(i), name, save_info(profile_save_file(name)))
     _console.print(table)
-    choices = [str(i) for i in range(1, len(profiles) + 1)] + ["n"]
-    dflt = str(profiles.index(default) + 1) if default in profiles else "1"
-    ans = Prompt.ask(f"{prompt} (number, or n = new)", choices=choices, default=dflt, show_choices=False)
-    if ans == "n":
-        raw = Prompt.ask("New profile name")
-        name = sanitize_profile(raw)
-        if not profile_exists(name):
-            create_profile(name)
-        return name
+    choices = [str(i) for i in range(1, len(profiles) + 1)]
+    ans = Prompt.ask("Source save to clone for BOTH sides", choices=choices, default="1", show_choices=False)
     return profiles[int(ans) - 1]
 
 
+def _set_one_variable(cfg: Config, field: str, kind: str) -> None:
+    """Prompt for a single A/B variable's value and set it on cfg."""
+    cur = getattr(cfg, field)
+    if kind == "bool":
+        setattr(cfg, field, Confirm.ask(f"B: {field}", default=bool(cur)))
+    elif kind == "int":
+        setattr(cfg, field, IntPrompt.ask(f"B: {field}", default=int(cur)))
+    else:
+        setattr(cfg, field, FloatPrompt.ask(f"B: {field}", default=float(cur)))
+
+
 def show_ab_menu() -> tuple[Config, Config] | None:
-    """Pre-launch picker for a synchronized A/B test. Returns two ready Configs
-    (A, B), each with its own profile settings loaded and a shared seed, or None
-    to cancel."""
+    """Fair A/B picker: clone ONE source save into two throwaway profiles
+    (ab-A / ab-B) so both start byte-identical, give both the SAME settings,
+    then change exactly one variable on B. Returns (cfgA, cfgB) or None."""
+    from cookiebot.persistence import clone_profile_save
+
     _console.print()
-    _console.print(Panel.fit("A/B test — synchronized, same seed", style="bold yellow"))
+    _console.print(Panel.fit("A/B test — fair: identical save, one variable", style="bold yellow"))
     if not list_profiles():
         create_profile(DEFAULT_PROFILE)
 
-    name_a = _pick_profile_for_ab("Profile A", DEFAULT_PROFILE)
-    name_b = _pick_profile_for_ab("Profile B", None)
-    if name_a == name_b:
-        _console.print("[red]A and B must be different profiles (they'd fight over one save).[/red]")
+    source = _pick_source_profile()
+    if source is None:
         return None
 
     seed = Prompt.ask("Shared RNG seed (same for both → identical luck)", default="ab-trial")
 
+    # Throwaway profiles so the source is never touched. Saves cloned identical.
+    name_a, name_b = "ab-A", "ab-B"
+    for nm in (name_a, name_b):
+        create_profile(nm)
+        clone_profile_save(source, nm)
+
+    # Base settings: copy the source's settings to BOTH so they're identical,
+    # then we'll diverge only one field on B.
+    base = Config()
+    base.save_profile = source
+    load_profile_settings(base)
+
     def build(name: str) -> Config:
         cfg = Config()
+        # adopt the identical base strategy
+        for f, _k in AB_TESTABLE_FIELDS:
+            setattr(cfg, f, getattr(base, f))
+        cfg.payback_mode = base.payback_mode
         cfg.save_profile = name
-        load_profile_settings(cfg)
         cfg.ab_seed = seed
         cfg.ab_log = True
         cfg.headless = False  # the whole point is to watch them
         return cfg
 
     cfg_a, cfg_b = build(name_a), build(name_b)
+    save_profile_settings(cfg_a)  # persist so each temp profile records its config
 
-    # Optionally tweak each side's strategy settings before launch.
-    if Confirm.ask(f"Edit settings for A ('{name_a}')?", default=False):
-        _edit_settings(cfg_a)
-    if Confirm.ask(f"Edit settings for B ('{name_b}')?", default=False):
-        _edit_settings(cfg_b)
+    # Choose the ONE variable that differs on B.
+    _console.print("\nVariable to test (changed on B only; A keeps the base value):")
+    for i, (f, _k) in enumerate(AB_TESTABLE_FIELDS, 1):
+        _console.print(f"  [bold]{i}[/bold]) {f}  [dim](A = {getattr(cfg_a, f)})[/dim]")
+    idx = IntPrompt.ask("Which variable", default=1)
+    if idx < 1 or idx > len(AB_TESTABLE_FIELDS):
+        return None
+    field, kind = AB_TESTABLE_FIELDS[idx - 1]
+    _set_one_variable(cfg_b, field, kind)
+    save_profile_settings(cfg_b)
 
     _console.print()
-    _console.print(f"A = [green]{name_a}[/green]  payback={cfg_a.payback_mode}  "
-                   f"reserve={cfg_a.lucky_reserve_seconds / 60:g}m")
-    _console.print(f"B = [green]{name_b}[/green]  payback={cfg_b.payback_mode}  "
-                   f"reserve={cfg_b.lucky_reserve_seconds / 60:g}m")
-    _console.print(f"seed = [cyan]{seed}[/cyan]   (logs → each profile's trials/ folder)")
+    _console.print(f"source save = [green]{source}[/green] (cloned to both, untouched)")
+    _console.print(f"A = ab-A   {field} = [cyan]{getattr(cfg_a, field)}[/cyan]")
+    _console.print(f"B = ab-B   {field} = [cyan]{getattr(cfg_b, field)}[/cyan]   (only difference)")
+    _console.print(f"seed = [cyan]{seed}[/cyan]")
     if not Confirm.ask("Launch both now?", default=True):
         return None
     return cfg_a, cfg_b

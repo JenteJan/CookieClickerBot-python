@@ -96,6 +96,20 @@ PROFILE_FIELDS = (
     "dragon_keep_buildings",
 )
 
+# The strategy variables worth A/B-testing, with their type, for the test menu.
+# (name, kind) where kind is "bool", "float", or "int". Browser/headless/backup
+# are excluded — they don't affect playstyle.
+AB_TESTABLE_FIELDS = (
+    ("payback_mode", "bool"),
+    ("lucky_reserve_seconds", "float"),
+    ("auto_pop_wrinklers_in_frenzy", "bool"),
+    ("auto_ascend", "bool"),
+    ("auto_ascend_gain_pct", "float"),
+    ("auto_train_dragon", "bool"),
+    ("achievement_payback_cap_s", "float"),
+    ("payback_cap_minutes", "float"),
+)
+
 
 @dataclass
 class Config:

@@ -2,9 +2,10 @@
 
 Spawns two bots (separate browser windows, not headless), loads both games
 fully, then starts them at the same instant so they run on identical luck from
-t=0. Drives both from one loop with a shared side-by-side dashboard and shared
-hotkeys, and writes a trial log for each so the run can be analysed afterwards
-with compare_trials.py.
+t=0. The picker clones ONE source save into two throwaway profiles and gives
+both identical settings except a single variable, so the run isolates that one
+change. Drives both from one loop with a shared side-by-side dashboard and
+shared hotkeys, and writes a trial log for each (compare with compare_trials.py).
 """
 from __future__ import annotations
 

@@ -148,6 +148,16 @@ def profile_exists(name: str) -> bool:
     return profile_dir(name).is_dir()
 
 
+def clone_profile_save(source: str, dest: str) -> None:
+    """Copy ``source``'s save into ``dest`` so a fresh A/B profile starts from a
+    byte-identical state. Creates ``dest`` if needed; overwrites its save."""
+    src = profile_save_file(source)
+    out = profile_save_file(dest)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(src.read_text() if src.exists() else "")
+    log.info("cloned save %r → %r", source, dest)
+
+
 def create_profile(name: str, copy_from: str | None = None) -> str:
     """Create a profile folder with a save file (empty, or copied from another).
     Returns the sanitized name actually used."""
