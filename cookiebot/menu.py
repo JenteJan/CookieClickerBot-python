@@ -515,3 +515,75 @@ def show_ab_menu() -> tuple[Config, Config] | None:
     if not Confirm.ask("Launch both now?", default=True):
         return None
     return cfg_a, cfg_b
+
+
+def show_batch_menu() -> dict | None:
+    """Picker for a batch A/B: N headless runs per group, independent luck,
+    aggregated live. Forces the two groups to differ in exactly one variable.
+    Returns a dict the batch runner consumes, or None to cancel."""
+    _console.print()
+    _console.print(Panel.fit("Batch A/B — N headless runs per group, averaged", style="bold yellow"))
+    if not list_profiles():
+        create_profile(DEFAULT_PROFILE)
+
+    source = _pick_source_profile()
+    if source is None:
+        return None
+    fresh = (source == "")
+
+    n = IntPrompt.ask("How many runs per group (A and B each)?", default=10)
+    n = max(1, n)
+
+    base = Config()
+    if not fresh:
+        base.save_profile = source
+        load_profile_settings(base)
+
+    # Choose the variable and BOTH explicit values, so they're guaranteed to
+    # differ (the old picker defaulted B to A's value → a silent no-op test).
+    _console.print("\nVariable to A/B (groups differ ONLY in this):")
+    for i, (f, _k) in enumerate(AB_TESTABLE_FIELDS, 1):
+        _console.print(f"  [bold]{i}[/bold]) {f}  [dim](base = {getattr(base, f)})[/dim]")
+    idx = IntPrompt.ask("Which variable", default=1)
+    if idx < 1 or idx > len(AB_TESTABLE_FIELDS):
+        return None
+    field, kind = AB_TESTABLE_FIELDS[idx - 1]
+
+    _console.print(f"\nSet the two values for [cyan]{field}[/cyan]:")
+    val_a = _prompt_value("Group A value", kind, getattr(base, field))
+    val_b = _prompt_value("Group B value", kind, _other_default(kind, val_a))
+    if val_a == val_b:
+        _console.print("[red]A and B values are identical — that's not a test. Aborting.[/red]")
+        return None
+
+    def build(value) -> Config:
+        cfg = Config(**{k: getattr(base, k) for (k, _kk) in AB_TESTABLE_FIELDS})
+        setattr(cfg, field, value)
+        return cfg
+
+    cfg_a, cfg_b = build(val_a), build(val_b)
+    _console.print()
+    _console.print(f"A: {field} = [cyan]{val_a}[/cyan]   ×{n} runs")
+    _console.print(f"B: {field} = [cyan]{val_b}[/cyan]   ×{n} runs")
+    _console.print(f"start = {'fresh game' if fresh else source}   (headless, independent luck)")
+    if not Confirm.ask(f"Launch {2 * n} headless instances now?", default=True):
+        return None
+    return {
+        "cfg_a": cfg_a, "cfg_b": cfg_b, "n": n,
+        "source": source, "fresh": fresh, "variable": field,
+    }
+
+
+def _prompt_value(label: str, kind: str, default):
+    if kind == "bool":
+        return Confirm.ask(label, default=bool(default))
+    if kind == "int":
+        return IntPrompt.ask(label, default=int(default))
+    return FloatPrompt.ask(label, default=float(default))
+
+
+def _other_default(kind: str, val_a):
+    """A sensible different default for group B so the two aren't identical."""
+    if kind == "bool":
+        return not val_a
+    return val_a  # numeric: user must change it; equality check catches no-ops

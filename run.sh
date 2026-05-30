@@ -35,4 +35,10 @@ if [ "${1:-}" = "--ab" ]; then
     exec "$PY" ab_test.py "$@"
 fi
 
+# `--batch` launches the batch A/B test (N headless runs per group, averaged).
+if [ "${1:-}" = "--batch" ]; then
+    shift
+    exec "$PY" batch_test.py "$@"
+fi
+
 exec "$PY" cookieBot.py "$@"

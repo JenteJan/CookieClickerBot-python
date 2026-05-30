@@ -407,14 +407,11 @@ class CookieBot:
         stamp = self.driver.execute_script("return String(Date.now());")
         path = profile_trials_dir(self.cfg.save_profile) / f"trial_{stamp}.jsonl"
         self._trial = TrialLogger(path)
-        self._trial.meta(
-            profile=self.cfg.save_profile,
-            seed=self.cfg.ab_seed,
-            payback_mode=self.cfg.payback_mode,
-            lucky_reserve_seconds=self.cfg.lucky_reserve_seconds,
-            auto_ascend=self.cfg.auto_ascend,
-        )
-        log.info("A/B trial log → %s", path.name)
+        # Log the FULL effective config so "what actually ran" is never
+        # ambiguous (the previous 3-field meta hid that payback wasn't applied).
+        from dataclasses import asdict
+        self._trial.meta(profile=self.cfg.save_profile, config=asdict(self.cfg))
+        log.info("A/B trial log → %s (payback=%s)", path.name, self.cfg.payback_mode)
 
     def trial_snapshot_tick(self) -> None:
         if self._trial is None:
