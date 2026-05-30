@@ -151,6 +151,10 @@ class Config:
     ab_seed: str = ""
     ab_log: bool = False
     ab_snapshot_period_s: float = 5.0  # how often to log a state snapshot
+    # Batch sync barrier (runtime only, not persisted). When set, the bot drops
+    # a "ready" marker here after loading and waits for the orchestrator's shared
+    # start signal, so all instances begin playing at the same instant.
+    barrier_dir: str = ""
     # Timestamped backups separate from the main save file. 0 disables backups;
     # retention of 0 days keeps them forever.
     backup_interval_hours: float = 6.0

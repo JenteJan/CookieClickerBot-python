@@ -142,7 +142,9 @@ class CookieBot:
         if self.cfg.disable_rendering and self.cfg.headless:
             self.driver.execute_script(scripts.DISABLE_RENDERING)
             log.info("rendering disabled (headless CPU saver)")
-        if start_intervals:
+        # With a barrier, hold the auto-clicker until every instance is loaded —
+        # we start it after the barrier wait below, not now.
+        if start_intervals and not self.cfg.barrier_dir:
             start_auto_intervals(self.driver)
         self._load_upgrade_catalog()
         self.golden_count = int(self.driver.execute_script(
@@ -163,6 +165,43 @@ class CookieBot:
             self._refresh_achievement_count()
         log.info("setup complete; %d golden cookie upgrades owned, %d achievements",
                  self.golden_count, self._status.achievements_owned)
+
+        # Batch barrier: signal we're loaded, wait for the shared start moment,
+        # then begin playing — so all instances start at the same instant.
+        if self.cfg.barrier_dir:
+            self._wait_at_barrier()
+
+    def _wait_at_barrier(self) -> None:
+        """Drop a 'ready' marker and block until the orchestrator's start signal,
+        then start the auto-clicker gated on that shared wall-clock moment."""
+        import os
+        bdir = self.cfg.barrier_dir
+        os.makedirs(bdir, exist_ok=True)
+        me = os.path.basename(self.save_file.parent.name) or self.cfg.save_profile
+        ready = os.path.join(bdir, f"{me}.ready")
+        start_file = os.path.join(bdir, "start_at_ms")
+        try:
+            with open(ready, "w") as f:
+                f.write(str(os.getpid()))
+        except OSError:
+            log.exception("barrier: could not write ready marker")
+        log.info("barrier: ready, waiting for shared start…")
+        # Poll for the start timestamp the orchestrator writes once all are ready.
+        deadline = time.monotonic() + 600  # safety cap (10 min)
+        start_at_ms = None
+        while time.monotonic() < deadline:
+            try:
+                with open(start_file) as f:
+                    start_at_ms = float(f.read().strip())
+                break
+            except (OSError, ValueError):
+                time.sleep(0.2)
+        if start_at_ms is None:
+            log.warning("barrier: no start signal; starting now")
+            start_auto_intervals(self.driver)
+            return
+        self.begin_play(start_at_ms=start_at_ms)
+        log.info("barrier: released at shared start")
 
     def _load_upgrade_catalog(self) -> None:
         raw = self.driver.execute_script(scripts.GET_ALL_UPGRADES)
@@ -697,6 +736,8 @@ def _parse_args() -> tuple[Config, bool]:
     p.add_argument("--ab-seed", default=None, help="Force deterministic RNG with this seed (A/B trials)")
     p.add_argument("--ab-log", action=argparse.BooleanOptionalAction, default=None,
                    help="Write a structured JSONL trial log to the profile's trials/ folder")
+    p.add_argument("--barrier-dir", default=None,
+                   help="Batch sync: signal ready here and wait for the shared start moment")
     args = p.parse_args()
 
     cfg = Config()
@@ -716,6 +757,7 @@ def _parse_args() -> tuple[Config, bool]:
     if args.ab_log is not None:
         cfg.ab_log = args.ab_log
     cfg.fresh = args.fresh
+    cfg.barrier_dir = args.barrier_dir or ""
     return cfg, args.no_menu
 
 

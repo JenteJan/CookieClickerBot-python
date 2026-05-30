@@ -62,6 +62,8 @@ class BatchABTest:
         self._plot_proc: subprocess.Popen | None = None
         self.profiles_a: list[str] = []
         self.profiles_b: list[str] = []
+        # Fresh barrier dir per run so stale ready/start files never leak in.
+        self._barrier_dir = PROFILES_DIR.parent / "ab_barrier"
         self._t0 = time.monotonic()
         # Time series for the live graph. We plot cumulative cookies (monotonic
         # and smooth — the real 'who's ahead' signal) rather than instantaneous
@@ -97,13 +99,34 @@ class BatchABTest:
 
     def _spawn(self, profile: str) -> subprocess.Popen:
         cmd = [sys.executable, "cookieBot.py", "--no-menu", "--headless",
-               "--profile", profile, "--ab-log"]
+               "--profile", profile, "--ab-log",
+               "--barrier-dir", str(self._barrier_dir)]
         if self.fresh:
             cmd.append("--fresh")  # hard-reset in the browser; don't load a save
         return subprocess.Popen(
             cmd, cwd=str(PROJECT_DIR),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+
+    def _release_barrier_when_ready(self) -> None:
+        """Wait until every still-alive instance has dropped its .ready marker,
+        then write the shared start timestamp so they all begin at once. A
+        crashed instance never reports, so we gate on alive count, not the
+        original total — one failure can't hang the whole batch."""
+        total = len(self.profiles_a) + len(self.profiles_b)
+        log.info("barrier: waiting for all %d instances to finish loading…", total)
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            ready = len(list(self._barrier_dir.glob("*.ready")))
+            alive = sum(1 for p in self.procs if p.poll() is None)
+            if alive > 0 and ready >= alive:
+                break
+            time.sleep(0.5)
+        ready = len(list(self._barrier_dir.glob("*.ready")))
+        # ~2s out so every instance polls the file and gates on the same moment.
+        start_at_ms = (time.time() + 2.0) * 1000.0
+        (self._barrier_dir / "start_at_ms").write_text(str(start_at_ms))
+        log.info("barrier: %d/%d ready → released; all start together in ~2s", ready, total)
 
     def _spawn_plot(self) -> subprocess.Popen | None:
         """Launch the standalone live matplotlib window. Best-effort: if the GUI
@@ -120,6 +143,11 @@ class BatchABTest:
 
     def run(self) -> None:
         log.info("batch A/B: %d runs per group, variable=%s", self.n, self.variable)
+        # Fresh barrier dir so a previous run's ready/start files can't leak in.
+        import shutil
+        shutil.rmtree(self._barrier_dir, ignore_errors=True)
+        self._barrier_dir.mkdir(parents=True, exist_ok=True)
+
         self.profiles_a = self._make_group(self.cfg_a, "bat-a-")
         self.profiles_b = self._make_group(self.cfg_b, "bat-b-")
 
@@ -128,6 +156,10 @@ class BatchABTest:
             self.procs.append(self._spawn(name))
             time.sleep(0.5)
         log.info("spawned %d headless instances", len(self.procs))
+
+        # Wait until every instance has loaded, then release them together — so
+        # all 20 start playing at the same instant (not as each finishes loading).
+        self._release_barrier_when_ready()
 
         # Launch the live matplotlib window in its own process (decoupled — it
         # tails the trial logs and never blocks this runner).
