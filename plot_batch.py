@@ -89,10 +89,21 @@ def _median(xs: list[float]) -> float:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--interval", type=float, default=3.0)
-    ap.add_argument("--metric", choices=("cookies", "cps"), default="cookies")
+    # base = unbuffed CPS (true build strength, no Frenzy spikes) — the default,
+    # since it's the fair A/B measure. cookies = cumulative lifetime baked.
+    # cps = raw buffed CPS (spiky; only for reference).
+    ap.add_argument("--metric", choices=("base", "cookies", "cps"), default="base")
     args = ap.parse_args(argv)
-    metric_key = "cookiesEarned" if args.metric == "cookies" else "cookiesPs"
-    ylabel = "cumulative cookies" if args.metric == "cookies" else "CPS"
+    metric_key = {
+        "base": "unbuffedCps",
+        "cookies": "cookiesEarned",
+        "cps": "cookiesPs",
+    }[args.metric]
+    ylabel = {
+        "base": "base CPS (unbuffed)",
+        "cookies": "cumulative cookies",
+        "cps": "CPS (buffed, spiky)",
+    }[args.metric]
 
     plt.ion()
     fig, ax = plt.subplots(figsize=(11, 6))

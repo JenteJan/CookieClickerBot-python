@@ -104,8 +104,8 @@ def main(argv: list[str]) -> int:
           f"{'A cookies':>10} {'B cookies':>10} {'cook A/B':>8}")
     rows = []
     for t in ts:
-        a_cps = median([value_at(r["snaps"], t, "cookiesPs") for r in A])
-        b_cps = median([value_at(r["snaps"], t, "cookiesPs") for r in B])
+        a_cps = median([(value_at(r["snaps"], t, "unbuffedCps") or value_at(r["snaps"], t, "cookiesPs")) for r in A])
+        b_cps = median([(value_at(r["snaps"], t, "unbuffedCps") or value_at(r["snaps"], t, "cookiesPs")) for r in B])
         a_ck = median([value_at(r["snaps"], t, "cookiesEarned") for r in A])
         b_ck = median([value_at(r["snaps"], t, "cookiesEarned") for r in B])
         cr = a_cps / b_cps if b_cps else 0.0
@@ -117,8 +117,8 @@ def main(argv: list[str]) -> int:
     step = max(1, len(ts) // 14)
     for i in range(0, len(ts), step):
         t = ts[i]
-        a_cps = median([value_at(r["snaps"], t, "cookiesPs") for r in A])
-        b_cps = median([value_at(r["snaps"], t, "cookiesPs") for r in B])
+        a_cps = median([(value_at(r["snaps"], t, "unbuffedCps") or value_at(r["snaps"], t, "cookiesPs")) for r in A])
+        b_cps = median([(value_at(r["snaps"], t, "unbuffedCps") or value_at(r["snaps"], t, "cookiesPs")) for r in B])
         a_ck = median([value_at(r["snaps"], t, "cookiesEarned") for r in A])
         b_ck = median([value_at(r["snaps"], t, "cookiesEarned") for r in B])
         cr = a_cps / b_cps if b_cps else 0.0

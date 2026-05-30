@@ -234,6 +234,11 @@ return {
     cookies: Game.cookies,
     cookiesEarned: Game.cookiesEarned,
     cookiesPs: Game.cookiesPs,
+    // Base production WITHOUT golden-cookie buffs (main.js sets this to
+    // cookiesPs*mult before applying Frenzy etc.). This is the stable measure
+    // of build strength — cookiesPs spikes x7 during a Frenzy and is too noisy
+    // to compare. A/B analysis should prefer this.
+    unbuffedCps: Game.unbuffedCps,
     buildingsOwned: Game.BuildingsOwned,
     upgradesOwned: Game.UpgradesOwned,
     achievementsOwned: Game.AchievementsOwned,

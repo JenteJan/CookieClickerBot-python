@@ -42,8 +42,10 @@ def group(prefix: str, metric: str) -> list[float]:
         if d.is_dir() and d.name.startswith(prefix):
             s = final_snapshot(d.name)
             if s:
-                key = "cookiesPs" if metric == "cps" else "cookiesEarned"
-                vals.append(float(s.get(key, 0.0)))
+                if metric == "cookies":
+                    vals.append(float(s.get("cookiesEarned", 0.0)))
+                else:  # base CPS (unbuffed) — the fair, non-spiky measure
+                    vals.append(float(s.get("unbuffedCps", s.get("cookiesPs", 0.0))))
     return vals
 
 
@@ -84,14 +86,15 @@ def fmt(n: float) -> str:
 
 
 def main(argv: list[str]) -> int:
-    metric = "cps"
+    metric = "base"   # base (unbuffed) CPS by default; or "cookies"
     if "--metric" in argv:
         metric = argv[argv.index("--metric") + 1]
 
     a = group("bat-a-", metric)
     b = group("bat-b-", metric)
     sa, sb = stats(a), stats(b)
-    label = "final CPS" if metric == "cps" else "cumulative cookies"
+    label = {"cookies": "cumulative cookies", "cps": "final CPS (buffed)"}.get(
+        metric, "final base CPS (unbuffed)")
     print(f"metric: {label}\n")
     for lbl, st in (("A", sa), ("B", sb)):
         if st["n"] == 0:

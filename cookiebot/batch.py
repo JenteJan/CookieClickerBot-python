@@ -180,7 +180,9 @@ class BatchABTest:
         for name in profiles:
             s = self._latest(name)
             if s:
-                cps.append(s.get("cookiesPs", 0.0))
+                # Base (unbuffed) CPS — stable build strength, not the x7 Frenzy
+                # spike. Fall back to cookiesPs for old logs without the field.
+                cps.append(s.get("unbuffedCps", s.get("cookiesPs", 0.0)))
                 cookies.append(s.get("cookiesEarned", 0.0))
         all_names = self.profiles_a + self.profiles_b
         running = sum(
@@ -238,8 +240,8 @@ class BatchABTest:
         t.add_column("var value")
         t.add_column("running", justify="right")
         t.add_column("samples", justify="right")  # instances contributing to the average
-        t.add_column("mean CPS", justify="right")
-        t.add_column("median CPS", justify="right")
+        t.add_column("mean baseCPS", justify="right")
+        t.add_column("median baseCPS", justify="right")
         t.add_column("mean cookies", justify="right")
         t.add_column("median cookies", justify="right")
         for label, profs, cfg in (("A", self.profiles_a, self.cfg_a), ("B", self.profiles_b, self.cfg_b)):
