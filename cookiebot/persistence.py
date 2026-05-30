@@ -149,11 +149,20 @@ def profile_exists(name: str) -> bool:
 
 
 def clone_profile_save(source: str, dest: str) -> None:
-    """Copy ``source``'s save into ``dest`` so a fresh A/B profile starts from a
-    byte-identical state. Creates ``dest`` if needed; overwrites its save."""
-    src = profile_save_file(source)
+    """Copy ``source``'s save into ``dest`` so an A/B profile starts from a
+    byte-identical state. Creates ``dest`` if needed; overwrites its save.
+
+    An empty/blank ``source`` means "start empty" — write an empty save. (NOTE:
+    do NOT pass it through profile_save_file, because sanitize_profile("")
+    resolves to the DEFAULT profile, which would silently clone the user's real
+    game instead of starting fresh.)"""
     out = profile_save_file(dest)
     out.parent.mkdir(parents=True, exist_ok=True)
+    if not source or not source.strip():
+        out.write_text("")
+        log.info("created empty save for %r (fresh)", dest)
+        return
+    src = profile_save_file(source)
     out.write_text(src.read_text() if src.exists() else "")
     log.info("cloned save %r → %r", source, dest)
 

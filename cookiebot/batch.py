@@ -78,12 +78,13 @@ class BatchABTest:
         return names
 
     def _spawn(self, profile: str) -> subprocess.Popen:
+        cmd = [sys.executable, "cookieBot.py", "--no-menu", "--headless",
+               "--profile", profile, "--ab-log"]
+        if self.fresh:
+            cmd.append("--fresh")  # hard-reset in the browser; don't load a save
         return subprocess.Popen(
-            [sys.executable, "cookieBot.py", "--no-menu", "--headless",
-             "--profile", profile, "--ab-log"],
-            cwd=str(PROJECT_DIR),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            cmd, cwd=str(PROJECT_DIR),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
 
     def run(self) -> None:
@@ -150,6 +151,7 @@ class BatchABTest:
         return {
             "n": len(profiles),
             "running": running,
+            "reporting": len(cps),  # how many instances actually have data yet
             "cps": _summary(cps),
             "cookies": _summary(cookies),
         }
@@ -160,6 +162,7 @@ class BatchABTest:
         t.add_column("group")
         t.add_column("var value")
         t.add_column("running", justify="right")
+        t.add_column("samples", justify="right")  # instances contributing to the average
         t.add_column("mean CPS", justify="right")
         t.add_column("median CPS", justify="right")
         t.add_column("mean cookies", justify="right")
@@ -170,6 +173,7 @@ class BatchABTest:
                 label,
                 str(getattr(cfg, self.variable, "?")),
                 f"{st['running']}/{st['n']}",
+                f"{st['reporting']}/{st['n']}",
                 _fmt(st["cps"]["mean"]),
                 _fmt(st["cps"]["median"]),
                 _fmt(st["cookies"]["mean"]),
