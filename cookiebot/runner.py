@@ -270,9 +270,12 @@ class CookieBot:
                 score += achievement_milk_bonus_cps(cookies_ps) / b.price
             return score
 
+        clicks_per_sec = 1000.0 / max(AUTOCLICK_COOKIE_MS, 1)
+
         def upgrade_score(uid: int) -> float:
             price = store_prices[uid]
-            parsed = score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings, price)
+            parsed = score_upgrade(self.upgrades_by_id[uid], cookies_ps, buildings, price,
+                                   clicks_per_sec=clicks_per_sec)
             # Payback mode is a HYBRID: take the larger of the parsed score and
             # the game's true marginal-CPS score. The marginal catches passive
             # multipliers (flavored cookies, kittens, tiers, synergies) the

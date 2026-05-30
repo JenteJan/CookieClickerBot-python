@@ -75,6 +75,11 @@ def is_achievement_unlock_upgrade(name: str) -> bool:
     return False
 
 
+# The bot autoclicks continuously, so a click-power upgrade's value is its
+# per-click gain × clicks/sec. Default matches AUTOCLICK_COOKIE_MS=25 → 40/s;
+# the runner passes the real configured rate.
+_DEFAULT_CLICKS_PER_SEC = 40.0
+
 _PCT = re.compile(r"\+(\d+)%")
 _BUILDING_EFF = re.compile(r"(\w+) are <b>(\w+)</b> as efficient\.")
 _BUILDING_GAIN_PCT = re.compile(r"(\w+) gain <b>\+(\d+)%</b> CpS")
@@ -113,12 +118,23 @@ def parse_upgrade_gain(description: str) -> UpgradeGain:
         m = _PCT.search(description)
         return UpgradeGain(int(m.group(1)) / 100, "all") if m else UpgradeGain(0.05, "all")
 
-    if "mouse and cursor" in description:
-        return UpgradeGain(1.0, "clicking")
+    # "Thousand/Million/… fingers": "The mouse and cursors gain +N cookies for
+    # each non-cursor building owned." This is PASSIVE cursor CpS (added to the
+    # Cursor building's production, scaling with building count) — NOT click
+    # power. The parser can't price it precisely (depends on building count +
+    # the finger multiplier chain), but it's worth far more than a click upgrade,
+    # so we tag it "cursor" → scored against the Cursor building's CpS. Payback
+    # mode values it exactly via CalculateGains; this is the fallback.
+    if "for each non-cursor building" in description or "non-cursor building" in description:
+        return UpgradeGain(1.0, "cursor")
 
+    # Genuine click-power upgrades: "Clicking gains +N% of your CpS" (Plastic
+    # mouse line) or the base "mouse and cursor are twice as efficient".
     if "Clicking gains" in description:
         m = _PCT.search(description)
         return UpgradeGain(int(m.group(1)) / 100, "clicking") if m else UpgradeGain(0.05, "clicking")
+    if "mouse and cursor" in description:
+        return UpgradeGain(1.0, "clicking")
 
     if "milk" in description:
         return UpgradeGain(0.25, "all")
@@ -144,12 +160,18 @@ def parse_upgrade_gain(description: str) -> UpgradeGain:
 
 
 def score_upgrade(
-    up: Upgrade, cookies_ps: float, buildings: list[Building], price: float | None = None
+    up: Upgrade,
+    cookies_ps: float,
+    buildings: list[Building],
+    price: float | None = None,
+    clicks_per_sec: float = _DEFAULT_CLICKS_PER_SEC,
 ) -> float:
     """Estimated cps-per-cost. Higher is better. Falls back to 0 when uncertain.
 
     ``price`` is the live purchase price (from getPrice(), reflecting discounts);
-    falls back to the cached base price when not supplied.
+    falls back to the cached base price when not supplied. ``clicks_per_sec`` is
+    the bot's actual autoclicker rate, used to convert click-power upgrades into
+    an effective passive-CPS contribution.
     """
     if price is None:
         price = up.base_price
@@ -159,8 +181,20 @@ def score_upgrade(
     if target == "all":
         score = (up.gain.factor * cookies_ps) / price
     elif target == "clicking":
-        # Click upgrades are evaluated as roughly 15 effective clicks/sec.
-        score = (cookies_ps * up.gain.factor * 15) / price
+        # Click-power upgrade adds factor×CpS to each click. At clicks_per_sec
+        # clicks/sec that's an effective +factor×CpS×clicks_per_sec of passive
+        # production (the bot autoclicks continuously).
+        score = (cookies_ps * up.gain.factor * clicks_per_sec) / price
+    elif target == "cursor":
+        # Thousand-fingers family: passive cursor CpS scaling with building
+        # count. Best proxy is the Cursor building's current total CpS — buying
+        # the upgrade roughly adds on that order. (Payback mode prices it exactly
+        # via CalculateGains; this keeps it from falling to the 0.05 floor.)
+        score = 0.0
+        for b in buildings:
+            if b.name.lower() == "cursor":
+                score = (up.gain.factor * max(b.total_cps, cookies_ps * 0.01)) / price
+                break
     else:
         needle = target.lower()
         score = 0.0
