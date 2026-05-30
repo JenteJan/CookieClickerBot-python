@@ -105,6 +105,7 @@ class CookieBot:
         self.driver = build_driver(cfg)
         self.upgrades_by_id: dict[int, Upgrade] = {}
         self.golden_count: int = 0
+        self._resync_golden: bool = False  # set after an ascension to re-read count
         self._sched = Scheduler()
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
@@ -493,6 +494,11 @@ class CookieBot:
         self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS, self.cfg.sugar_lump_spread_cap)
         write_save(self.driver, self.save_file)
         self._refresh_achievement_count()
+        # After an ascension, re-read the holding-upgrade count once the rebirth
+        # has settled (handles permanent-upgrade carryover correctly).
+        if self._resync_golden:
+            self._resync_golden = False
+            self._resync_golden_count()
 
     def backup_tick(self) -> None:
         backups_dir = profile_backups_dir(self.cfg.save_profile)
@@ -531,6 +537,24 @@ class CookieBot:
         write_save(self.driver, self.save_file)
         self.driver.execute_script(scripts.DO_ASCEND)
         self._status.update(last_action=f"ascended (+{gain:.0f} prestige)")
+        # The holding upgrades (Lucky day / Serendipity / Get lucky) are wiped by
+        # the reset unless kept as permanent upgrades, so the old golden_count is
+        # stale — clear it now to drop the Lucky reserve, and re-sync from the
+        # game on the next save tick once reincarnation has settled.
+        self.golden_count = 0
+        self._status.update(golden_count=0)
+        self._resync_golden = True
+
+    def _resync_golden_count(self) -> None:
+        """Re-read how many holding upgrades are actually owned (covers the
+        permanent-upgrade case where some persist across ascension)."""
+        try:
+            self.golden_count = int(self.driver.execute_script(
+                scripts.COUNT_GOLDEN_COOKIE_UPGRADES, GOLDEN_COOKIE_UPGRADE_NAMES,
+            ))
+        except Exception:
+            return
+        self._status.update(golden_count=self.golden_count)
 
     # ---- achievement helpers ----------------------------------------------
 
