@@ -11,6 +11,10 @@ strategies side by side.
 > never sets cookie counts or unlocks things directly, so it does **not** flag
 > your save as cheated. See [Is this cheating?](#is-this-cheating).
 
+> **Your part:** a few things are left to you — buying heavenly upgrades after
+> ascending, picking dragon auras, choosing when to ascend, and the
+> achievements that need a real run style. See **[PLAYER_GUIDE.md](PLAYER_GUIDE.md)**.
+
 ## Requirements
 
 - Python 3.9+
