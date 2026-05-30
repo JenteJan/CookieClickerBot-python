@@ -137,6 +137,11 @@ class CookieBot:
             self.driver.execute_script(scripts.HARD_RESET)
         else:
             load_save(self.driver, self.save_file)
+        # Headless instances render for nobody — stop drawing to cut CPU. Never
+        # blank a visible window the user is watching.
+        if self.cfg.disable_rendering and self.cfg.headless:
+            self.driver.execute_script(scripts.DISABLE_RENDERING)
+            log.info("rendering disabled (headless CPU saver)")
         if start_intervals:
             start_auto_intervals(self.driver)
         self._load_upgrade_catalog()

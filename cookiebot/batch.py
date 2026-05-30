@@ -81,6 +81,12 @@ class BatchABTest:
             cfg.ab_seed = ""        # independent luck per run
             cfg.headless = True
             cfg.fresh = self.fresh
+            # CPU savers for 20 concurrent headless browsers: stop rendering and
+            # slow the purchase tick from 50ms to 200ms (the heavy part is the
+            # per-tick Selenium snapshot; golden cookies are popped by an in-page
+            # interval regardless, so a slightly slower buy cadence is harmless).
+            cfg.disable_rendering = True
+            cfg.purchase_period_s = max(cfg.purchase_period_s, 0.2)
             save_profile_settings(cfg, profile=name)
             names.append(name)
         return names

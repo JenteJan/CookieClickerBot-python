@@ -12,6 +12,28 @@ return typeof Game !== 'undefined'
 
 CLOSE_PROMPT = "Game.ClosePrompt();"
 
+# Cut rendering CPU for headless/background runs. The game's logic and draw are
+# separate: Game.Loop only calls the expensive Game.Draw() when Game.visible is
+# true (it's normally toggled by the tab's visibilitychange). Headless Firefox
+# still reports the page visible, so it renders full-speed for nobody. We force
+# visible=false (re-asserted on a short interval since the event can flip it
+# back) and disable the cosmetic prefs (particles, floating numbers, wobble,
+# fancy graphics, etc.). Game logic — cookies, CPS, golden cookies — is
+# unaffected; only drawing stops. Returns the prefs we changed.
+DISABLE_RENDERING = """
+Game.visible = false;
+if (!window._abKeepHidden) {
+    window._abKeepHidden = setInterval(function() { Game.visible = false; }, 1000);
+}
+var off = ['particles','numbers','wobbly','fancy','milk','cursors','filters','extraButtons'];
+if (Game.prefs) {
+    for (var i = 0; i < off.length; i++) {
+        if (off[i] in Game.prefs) Game.prefs[off[i]] = 0;
+    }
+}
+return true;
+"""
+
 # Force deterministic RNG for A/B trials. The game pins per-event randomness to
 # Game.seed (e.g. "seed/lumpT", "seed-fortune"), but also calls Math.seedrandom()
 # with NO argument 11 times to deliberately go back to entropy — which would

@@ -94,6 +94,8 @@ PROFILE_FIELDS = (
     "auto_ascend_gain_pct",
     "auto_train_dragon",
     "dragon_keep_buildings",
+    "disable_rendering",
+    "purchase_period_s",
 )
 
 # The strategy variables worth A/B-testing, with their type, for the test menu.
@@ -118,6 +120,12 @@ class Config:
     browser: str = "firefox"
     headless: bool = False
     fresh: bool = False  # Hard-reset the game on launch (skips loading the save).
+    # Stop the game rendering (Game.visible=false + cosmetic prefs off) to cut
+    # CPU. Only the canvas/DOM drawing stops; game logic is unaffected. Applied
+    # ONLY when headless (a visible window you're watching is never blanked).
+    # This is the big win for batch runs (20 headless browsers rendering for
+    # nobody). Set false to keep even headless instances drawing.
+    disable_rendering: bool = True
     purchase_period_s: float = 0.05
     lucky_period_s: float = 0.5
     news_period_s: float = 0.5
