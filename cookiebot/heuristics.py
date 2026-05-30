@@ -46,16 +46,35 @@ def building_buy_crosses_achievement(amount: int, qty: int = 1) -> bool:
     return any(amount < t <= amount + qty for t in _ACHIEVEMENT_BUILDING_THRESHOLDS)
 
 
-# ---- golden-cookie expected value (Lucky term only) -----------------------
+# ---- golden-cookie expected value (bank-dependent effects) ----------------
 #
-# Lucky! pays min(0.15 * bank, cap) + 13, where cap = cookiesPs * 60 * 15 (15
-# minutes of CPS), raised to ~7x with "Get lucky". Since cookiesPs is live, the
-# cap auto-rises ~7x during a Frenzy. The only golden-cookie effect whose value
-# depends on your bank is Lucky, so it's the only term relevant to bank-vs-spend.
+# Two golden-cookie effects scale with your bank, so both matter for the
+# bank-vs-spend decision (verified against live main.js):
+#
+#   Lucky!:      pays min(0.15*bank, capL), capL = cookiesPs*60*15 (15 min CPS),
+#                raised ~7x by "Get lucky". Frequent (every golden cookie can be
+#                Lucky). Marginal value of +1 banked cookie = 0.15 per Lucky.
+#
+#   Cookie Chain: a maxed chain pays ~min(cookiesPs*60*60*6, 0.5*bank) — i.e.
+#                6 hours of CPS OR 50% of bank, whichever is smaller. Rare (~3%
+#                chance to even enter the effect pool, then one of several picks
+#                → roughly one chain start per ~200+ golden cookies) and needs a
+#                huge bank (0.5*bank hits the 6h cap at bank = 12h of CPS). Its
+#                start length also grows with log10(bank). Marginal value of +1
+#                banked cookie ≈ chain_rate * 0.5.
+#
+# Since cookiesPs is live, both caps auto-rise during a Frenzy.
 
 _LUCKY_FRAC = 0.15
 _LUCKY_BASE_CAP_S = 15 * 60       # 15 min of CPS, the base Lucky cap
 _GET_LUCKY_CAP_MULT = 7.0          # "Get lucky" raises the cap ~7x
+
+_CHAIN_FRAC = 0.5                  # a chain pays up to 50% of bank
+_CHAIN_CAP_S = 6 * 60 * 60         # ...capped at 6 hours of CPS
+# Approx probability a given golden cookie *starts* a chain: ~3% to enter the
+# pool, then one of ~7 picks. Conservative; chains also need the bot to keep
+# clicking through the chain window (it does, via the 1s popper).
+_CHAIN_START_PROB = 0.03 / 7.0
 
 
 def mean_spawn_interval_s(min_frames: float, max_frames: float, fps: float = 30.0) -> float:
@@ -85,27 +104,39 @@ def lucky_cap(cookies_ps: float, get_lucky: bool) -> float:
     return cap * _GET_LUCKY_CAP_MULT if get_lucky else cap
 
 
+def chain_cap(cookies_ps: float) -> float:
+    """Max Cookie Chain payout from the per-CPS cap term (6 hours of CPS)."""
+    return cookies_ps * _CHAIN_CAP_S
+
+
 def marginal_bank_value_per_s(cookies: float, cookies_ps: float,
                               mean_interval_s: float, get_lucky: bool) -> float:
-    """Cookies/sec gained by holding ONE more cookie in reserve, via Lucky.
+    """Cookies/sec gained by holding ONE more cookie in reserve, summing the two
+    bank-dependent golden-cookie effects:
 
-    Each Lucky pays 0.15*bank up to the cap, ~once per mean_interval. So one
-    extra banked cookie adds 0.15 per Lucky — UNTIL the bank is large enough that
-    the 15%-term exceeds the cap, after which extra banking does nothing.
-    Returns the marginal cookies/sec, directly comparable to a purchase's
+      Lucky:  +0.15 per Lucky (every ~interval) while 0.15*bank < Lucky cap.
+      Chain:  +chain_prob*0.5 per chain-start while 0.5*bank < 6h-CPS cap.
+
+    Returns marginal cookies/sec, directly comparable to a purchase's
     value-per-cost (ΔCPS per cookie spent)."""
     if mean_interval_s <= 0 or cookies_ps <= 0:
         return 0.0
-    cap = lucky_cap(cookies_ps, get_lucky)
-    # Above the cap, the 15%-of-bank term is capped → marginal value is 0.
-    if _LUCKY_FRAC * cookies >= cap:
-        return 0.0
-    return _LUCKY_FRAC / mean_interval_s
+    v = 0.0
+    if _LUCKY_FRAC * cookies < lucky_cap(cookies_ps, get_lucky):
+        v += _LUCKY_FRAC / mean_interval_s
+    if _CHAIN_FRAC * cookies < chain_cap(cookies_ps):
+        v += (_CHAIN_START_PROB * _CHAIN_FRAC) / mean_interval_s
+    return v
 
 
 def lucky_reserve_target(cookies_ps: float, get_lucky: bool) -> float:
-    """Bank size where 15%-of-bank hits the Lucky cap (banking beyond is wasted)."""
-    return lucky_cap(cookies_ps, get_lucky) / _LUCKY_FRAC
+    """Bank size to keep reserved. Past the Lucky cap (15%-of-bank hits its cap),
+    the Chain term still adds a little value up to ITS cap (0.5*bank = 6h CPS, i.e.
+    bank = 12h of CPS), so the worthwhile reserve extends to the larger Chain
+    target. Banking beyond the Chain cap is wasted."""
+    lucky_target = lucky_cap(cookies_ps, get_lucky) / _LUCKY_FRAC      # ~100 min (700 w/ get lucky)
+    chain_target = chain_cap(cookies_ps) / _CHAIN_FRAC                  # 12 h of CPS
+    return max(lucky_target, chain_target)
 
 
 def achievement_milk_bonus_cps(cookies_ps: float) -> float:

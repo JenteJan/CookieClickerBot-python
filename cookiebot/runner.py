@@ -32,6 +32,7 @@ from cookiebot.heuristics import (
     building_from_js,
     is_achievement_unlock_upgrade,
     lucky_reserve_target,
+    marginal_bank_value_per_s,
     mean_spawn_interval_s,
     parse_upgrade_gain,
     score_upgrade,
@@ -121,6 +122,9 @@ class CookieBot:
         self._tier_bundles: list[dict] = []
         # Golden-cookie spawn timing for the dynamic reserve, refreshed slowly.
         self._golden_timing: dict = {}
+        # Best purchase value-per-cost this tick; the dynamic reserve compares
+        # the marginal banking value against it.
+        self._best_purchase_score: float = 0.0
         self._trial: TrialLogger | None = None  # set in setup() when ab_log is on
         self._tick_gate_monotonic = 0.0  # A/B: hold purchases until shared start
         self._console = console or Console()
@@ -317,6 +321,12 @@ class CookieBot:
 
         self._update_next_buys(cookies, buildings, scored_upgrades, store_prices)
 
+        # Remember the best available purchase score (value-per-cost) so the
+        # dynamic reserve can compare banking-for-golden-cookies against it.
+        self._best_purchase_score = max(
+            building_score(best_building), best_upgrade[1], best_bundle_score,
+        )
+
         # Optional payback ceiling: skip anything slower to pay off than the cap.
         # score is value-per-cost, so the minimum acceptable score is 1/cap_seconds.
         min_score = 0.0
@@ -356,17 +366,31 @@ class CookieBot:
         )
 
     def _reserve_target(self, cookies_ps: float) -> float:
-        """Cookies to keep banked for Lucky! payouts. Either the fixed setting or
-        the dynamic EV-driven target (bank up to the Lucky cap)."""
+        """Cookies to keep banked for golden-cookie payouts (display/fixed mode).
+        Fixed: the setting. Dynamic: the EV target (extends to the larger Chain
+        cap, ~12 h of CPS, since the Chain term keeps a little value past Lucky)."""
         if self.cfg.dynamic_golden_reserve and self._golden_timing:
             return lucky_reserve_target(cookies_ps, self._golden_timing.get("getLucky", False))
         return cookies_ps * self.cfg.lucky_reserve_seconds
 
     def _affordable_with_reserve(self, cookies: float, cookies_ps: float, price: float) -> bool:
-        """Keep a reserve so Lucky! payouts hit the cap. In dynamic mode the
-        reserve is EV-driven and applies whenever golden cookies pay out; in the
-        fixed mode it only engages once all 3 holding upgrades are owned."""
-        if not self.cfg.dynamic_golden_reserve and self.golden_count != 3:
+        """Whether a purchase is affordable while keeping the golden-cookie reserve.
+
+        Dynamic mode: bank a cookie only while its *marginal* golden-cookie value
+        (Lucky + Chain, per second) beats the best available purchase's
+        value-per-cost — a true EV comparison, so it won't hoard 12 h of CPS for
+        a rare chain when buying returns more. Fixed mode: keep a flat reserve,
+        engaged once all 3 holding upgrades are owned."""
+        if self.cfg.dynamic_golden_reserve and self._golden_timing:
+            interval = self._golden_timing.get("mean_interval_s", 0.0)
+            get_lucky = self._golden_timing.get("getLucky", False)
+            mv = marginal_bank_value_per_s(cookies, cookies_ps, interval, get_lucky)
+            # If banking the next cookie is worth more than spending it, hold.
+            if mv > self._best_purchase_score and cookies < price + cookies_ps:
+                return False
+            return cookies >= price
+
+        if self.golden_count != 3:
             return cookies >= price
         reserve = self._reserve_target(cookies_ps)
         if cookies >= reserve + price:
