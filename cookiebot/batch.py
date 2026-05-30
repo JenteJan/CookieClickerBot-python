@@ -21,8 +21,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 from rich.console import Console
+from rich.console import Group as RGroup
 from rich.live import Live
 from rich.table import Table
+from rich.text import Text
 
 from cookiebot.config import (
     PROJECT_DIR,
@@ -60,6 +62,12 @@ class BatchABTest:
         self.profiles_a: list[str] = []
         self.profiles_b: list[str] = []
         self._t0 = time.monotonic()
+        # Time series for the live graph: minutes since start → group median/min/max CPS.
+        self._series_t: list[float] = []
+        self._series: dict[str, dict[str, list[float]]] = {
+            "A": {"median": [], "min": [], "max": []},
+            "B": {"median": [], "min": [], "max": []},
+        }
 
     def _make_group(self, base: Config, prefix: str) -> list[str]:
         names = []
@@ -101,6 +109,7 @@ class BatchABTest:
         try:
             with Live(self._render(), console=self.console, refresh_per_second=1, screen=False) as live:
                 while any(p.poll() is None for p in self.procs):
+                    self._sample_series()
                     live.update(self._render())
                     time.sleep(2.0)
         except KeyboardInterrupt:
@@ -156,7 +165,44 @@ class BatchABTest:
             "cookies": _summary(cookies),
         }
 
-    def _render(self) -> Table:
+    def _sample_series(self) -> None:
+        """Append one time-point of each group's median/min/max CPS for the graph."""
+        minutes = (time.monotonic() - self._t0) / 60.0
+        stats = {lbl: self._group_stats(p) for lbl, p in (("A", self.profiles_a), ("B", self.profiles_b))}
+        # Only start the series once both groups have at least one reporting run,
+        # so the early single-sample noise doesn't dominate the y-axis.
+        if stats["A"]["reporting"] == 0 and stats["B"]["reporting"] == 0:
+            return
+        self._series_t.append(minutes)
+        for lbl in ("A", "B"):
+            c = stats[lbl]["cps"]
+            self._series[lbl]["median"].append(c["median"])
+            self._series[lbl]["min"].append(c["min"])
+            self._series[lbl]["max"].append(c["max"])
+
+    def _graph(self, width: int = 78, height: int = 18) -> str:
+        if len(self._series_t) < 2:
+            return "[dim]collecting data for the graph…[/dim]"
+        try:
+            import plotext as plt
+        except ImportError:
+            return "[dim](install plotext for the live graph)[/dim]"
+        plt.clf()
+        plt.theme("clear")
+        plt.plotsize(width, height)
+        x = self._series_t
+        # Median lines bold; min/max thinner context for each group.
+        plt.plot(x, self._series["A"]["median"], label="A median", color="cyan")
+        plt.plot(x, self._series["A"]["min"], label="A min", color="blue")
+        plt.plot(x, self._series["A"]["max"], label="A max", color="blue")
+        plt.plot(x, self._series["B"]["median"], label="B median", color="orange")
+        plt.plot(x, self._series["B"]["min"], label="B min", color="red")
+        plt.plot(x, self._series["B"]["max"], label="B max", color="red")
+        plt.title("CPS over time (median / min / max per group)")
+        plt.xlabel("minutes")
+        return plt.build()
+
+    def _render(self):
         elapsed = time.monotonic() - self._t0
         t = Table(title=f"Batch A/B  —  {elapsed/3600:.2f} h elapsed  —  variable: {self.variable}")
         t.add_column("group")
@@ -179,7 +225,7 @@ class BatchABTest:
                 _fmt(st["cookies"]["mean"]),
                 _fmt(st["cookies"]["median"]),
             )
-        return t
+        return RGroup(t, Text(), Text.from_ansi(self._graph()))
 
 
 def _summary(xs: list[float]) -> dict:

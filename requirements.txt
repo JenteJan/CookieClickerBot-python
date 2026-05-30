@@ -1,3 +1,4 @@
 selenium>=4.20
 numpy>=1.26
 rich>=13.0
+plotext>=5.2
