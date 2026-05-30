@@ -140,6 +140,10 @@ class Config:
     # already-won ones are skipped automatically.)
     achievement_max_step: int = 50
     achievement_payback_cap_s: float = 1200.0  # 20 min of CPS
+    # After unlocking the minigames + Farm L9 / Cursor L12, keep leveling the
+    # lowest building toward this level (each level = +1% that building's CpS;
+    # L10 also grants an achievement). 0 disables the spread phase.
+    sugar_lump_spread_cap: int = 10
     # A/B trial mode. When ab_seed is set, RNG is forced deterministic (same
     # seed for both runs → identical starting luck). When ab_log is True, the
     # bot writes a structured JSONL trial log (snapshots + purchase/buff events)

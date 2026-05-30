@@ -430,24 +430,72 @@ if (temple.level != 0 && temple.minigame) {
 }
 """
 
+# Spend sugar lumps by a value-ordered priority (strategy guide §18.5). Leveling
+# a building to level N costs N+1 lumps (Game.spendLump(level+1, …)). We do ONE
+# level-up per call (the cheapest worthwhile target we can afford), so a steady
+# lump income trickles into the best slot over time.
+#
+# Priority, in order:
+#   1. Unlock the four minigames at level 1 — biggest gameplay unlock:
+#      Wizard Tower (7, Grimoire) → Temple (6, Pantheon) → Farm (2, Garden)
+#      → Bank (5, Stock Market). Pantheon also gets its gods slotted on unlock.
+#   2. Farm → level 9 (max garden grid).
+#   3. Cursor → level 12 (Stock Market HQ / glove bonuses).
+#   4. Spread everything else toward level 10 (each level = +1% that building's
+#      CpS; level 10 also grants an achievement → more milk).
+#
+# arguments[0] = max level to push buildings to in the "spread" phase (e.g. 10).
 SPEND_SUGAR_LUMPS = """
-if (Game.lumps > 1) {
-    var order = [7, 6, 2, 5];
-    for (var k = 0; k < order.length; k++) {
-        var obj = Game.ObjectsById[order[k]];
-        if (obj && obj.level == 0) {
-            obj.levelUp();
-            if (order[k] == 6 && obj.minigame) {
+var spreadCap = arguments[0] || 10;
+// No lump-spend confirmation prompts (would block headless / freeze the UI).
+if (Game.prefs) Game.prefs.askLumps = 0;
+
+function canAfford(obj) { return Game.lumps >= obj.level + 1; }
+function tryLevel(obj) {
+    if (obj && canAfford(obj)) {
+        var was = obj.level;
+        obj.levelUp(false);
+        if (obj.level > was) {
+            // Slot the pantheon gods the moment the Temple unlocks its minigame.
+            if (obj.id == 6 && obj.minigame) {
                 try {
                     obj.minigame.slotGod(obj.minigame.godsById[1], 1);
                     obj.minigame.slotGod(obj.minigame.godsById[6], 2);
                     obj.minigame.slotGod(obj.minigame.godsById[8], 3);
-                } catch (error) {}
+                } catch (e) {}
             }
-            break;
+            return true;
         }
     }
+    return false;
 }
+
+// 1. Minigame unlocks (value order).
+var unlockOrder = [7, 6, 2, 5];
+for (var i = 0; i < unlockOrder.length; i++) {
+    var o = Game.ObjectsById[unlockOrder[i]];
+    if (o && o.level == 0) { if (tryLevel(o)) return true; else return false; }
+}
+
+// 2. Farm to level 9 (garden grid size).
+var farm = Game.ObjectsById[2];
+if (farm && farm.level < 9) { return tryLevel(farm); }
+
+// 3. Cursor to level 12 (stock HQ / gloves).
+var cursor = Game.ObjectsById[0];
+if (cursor && cursor.level < 12) { return tryLevel(cursor); }
+
+// 4. Spread: level the lowest building toward spreadCap (cheapest = most value
+//    per lump, and evens out the +1%/level bonuses).
+var best = null;
+for (var key in Game.Objects) {
+    var b = Game.Objects[key];
+    if (b.amount > 0 && b.level < spreadCap) {
+        if (best === null || b.level < best.level) best = b;
+    }
+}
+if (best) return tryLevel(best);
+return false;
 """
 
 CHECK_STOCK_MARKET = """

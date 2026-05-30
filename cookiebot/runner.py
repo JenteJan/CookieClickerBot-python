@@ -451,7 +451,7 @@ class CookieBot:
             self._tier_bundles = []
 
     def save_tick(self) -> None:
-        self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS)
+        self.driver.execute_script(scripts.SPEND_SUGAR_LUMPS, self.cfg.sugar_lump_spread_cap)
         write_save(self.driver, self.save_file)
         self._refresh_achievement_count()
 
