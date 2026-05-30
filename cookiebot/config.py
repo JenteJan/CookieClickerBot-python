@@ -164,6 +164,12 @@ class Config:
     # 15-min cap. 6000 s = 100 min, the smallest bank that maxes Lucky.
     # 43200 s = 12 h enables full Cookie Chain payouts as well.
     lucky_reserve_seconds: float = 6000.0
+    # Dynamic, EV-driven reserve. When on, the bot computes the marginal value
+    # of banking one more cookie (0.15 / golden-cookie spawn interval, via Lucky)
+    # and only reserves while that beats the best available purchase — up to the
+    # Lucky cap (which rises ~7x during a Frenzy and with "Get lucky"). Replaces
+    # the fixed lucky_reserve_seconds bank when enabled. Off by default.
+    dynamic_golden_reserve: bool = False
     # One-shot achievement helpers. On by default — every entry is a net
     # positive (the God-complex rename now restores your previous name, so the
     # -1% debuff doesn't stick; selling one grandma trades a few seconds of

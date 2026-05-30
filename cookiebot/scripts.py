@@ -249,6 +249,28 @@ return {
 };
 """
 
+# Read the live golden-cookie spawn timing straight from the game, which already
+# applies every frequency modifier (Lucky day, Serendipity, Arcane Aura, season,
+# pantheon, etc.). Returns min/max spawn FRAMES and fps; the Python side converts
+# to a mean interval. Also reports current cookies/cps and whether a Frenzy-style
+# multiplier is active (so the Lucky cap can use the buffed CPS).
+GOLDEN_TIMING = """
+var g = Game.shimmerTypes['golden'];
+var minF = 0, maxF = 0;
+try { minF = g.getMinTime(g); maxF = g.getMaxTime(g); } catch (e) {}
+var hasFortune = Game.Has && Game.Has('Get lucky');
+return {
+    minFrames: minF,
+    maxFrames: maxF,
+    fps: Game.fps || 30,
+    cookies: Game.cookies,
+    cookiesPs: Game.cookiesPs,       // live (buffed) CPS — Lucky cap uses this
+    unbuffedCps: Game.unbuffedCps,
+    getLucky: !!hasFortune,          // "Get lucky" raises the cap multiplier
+    canSpawn: !!(g.spawnConditions ? g.spawnConditions() : true)
+};
+"""
+
 COUNT_GOLDEN_COOKIE_UPGRADES = """
 var names = arguments[0];
 var total = 0;

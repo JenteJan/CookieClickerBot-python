@@ -31,6 +31,8 @@ from cookiebot.heuristics import (
     building_buy_crosses_achievement,
     building_from_js,
     is_achievement_unlock_upgrade,
+    lucky_reserve_target,
+    mean_spawn_interval_s,
     parse_upgrade_gain,
     score_upgrade,
 )
@@ -117,6 +119,8 @@ class CookieBot:
         # Cache of tier-unlock bundles (buy N buildings + the upgrade they
         # unlock), refreshed on the same slow cadence.
         self._tier_bundles: list[dict] = []
+        # Golden-cookie spawn timing for the dynamic reserve, refreshed slowly.
+        self._golden_timing: dict = {}
         self._trial: TrialLogger | None = None  # set in setup() when ab_log is on
         self._tick_gate_monotonic = 0.0  # A/B: hold purchases until shared start
         self._console = console or Console()
@@ -164,6 +168,9 @@ class CookieBot:
             self._fire_achievements(achievements.RISKY)
         if self.cfg.auto_fire_safe_achievements or self.cfg.auto_fire_risky_achievements:
             self._refresh_achievement_count()
+        if self.cfg.dynamic_golden_reserve:
+            self._refresh_golden_timing()  # prime before first purchase tick
+            log.info("dynamic golden-cookie reserve on")
         log.info("setup complete; %d golden cookie upgrades owned, %d achievements",
                  self.golden_count, self._status.achievements_owned)
 
@@ -226,8 +233,12 @@ class CookieBot:
         snap = self.driver.execute_script(scripts.GAME_SNAPSHOT)
         cookies: float = snap["cookies"]
         cookies_ps: float = snap["cookiesPs"]
-        # The reserve only applies once all three holding upgrades are owned.
-        reserve_target = self.cfg.lucky_reserve_seconds if self.golden_count == 3 else 0.0
+        # Reserve shown as seconds-of-CPS. Dynamic mode: the EV-driven target;
+        # fixed mode: the setting, but only once all 3 holding upgrades are owned.
+        if self.cfg.dynamic_golden_reserve and self._golden_timing:
+            reserve_target = (self._reserve_target(cookies_ps) / cookies_ps) if cookies_ps else 0.0
+        else:
+            reserve_target = self.cfg.lucky_reserve_seconds if self.golden_count == 3 else 0.0
         self._status.update(
             cookies=cookies, cookies_ps=cookies_ps, reserve_target_s=reserve_target
         )
@@ -344,11 +355,20 @@ class CookieBot:
             ]
         )
 
+    def _reserve_target(self, cookies_ps: float) -> float:
+        """Cookies to keep banked for Lucky! payouts. Either the fixed setting or
+        the dynamic EV-driven target (bank up to the Lucky cap)."""
+        if self.cfg.dynamic_golden_reserve and self._golden_timing:
+            return lucky_reserve_target(cookies_ps, self._golden_timing.get("getLucky", False))
+        return cookies_ps * self.cfg.lucky_reserve_seconds
+
     def _affordable_with_reserve(self, cookies: float, cookies_ps: float, price: float) -> bool:
-        """Once all 3 holding upgrades are owned, keep a reserve so Lucky! payouts hit the cap."""
-        if self.golden_count != 3:
+        """Keep a reserve so Lucky! payouts hit the cap. In dynamic mode the
+        reserve is EV-driven and applies whenever golden cookies pay out; in the
+        fixed mode it only engages once all 3 holding upgrades are owned."""
+        if not self.cfg.dynamic_golden_reserve and self.golden_count != 3:
             return cookies >= price
-        reserve = cookies_ps * self.cfg.lucky_reserve_seconds
+        reserve = self._reserve_target(cookies_ps)
         if cookies >= reserve + price:
             return True
         # Trivially cheap purchases (under 1 s of CPS) still go through if we have
@@ -502,6 +522,23 @@ class CookieBot:
         if self._resync_golden:
             self._resync_golden = False
             self._resync_golden_count()
+        # Refresh golden-cookie spawn timing for the dynamic reserve. Changes
+        # slowly (only when frequency upgrades are bought), so 30s is plenty.
+        if self.cfg.dynamic_golden_reserve:
+            self._refresh_golden_timing()
+
+    def _refresh_golden_timing(self) -> None:
+        try:
+            t = self.driver.execute_script(scripts.GOLDEN_TIMING)
+        except Exception:
+            return
+        if not t:
+            return
+        t["mean_interval_s"] = mean_spawn_interval_s(
+            float(t.get("minFrames", 0)), float(t.get("maxFrames", 0)),
+            float(t.get("fps", 30)),
+        )
+        self._golden_timing = t
 
     def backup_tick(self) -> None:
         backups_dir = profile_backups_dir(self.cfg.save_profile)

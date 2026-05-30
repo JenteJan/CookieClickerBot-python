@@ -46,6 +46,68 @@ def building_buy_crosses_achievement(amount: int, qty: int = 1) -> bool:
     return any(amount < t <= amount + qty for t in _ACHIEVEMENT_BUILDING_THRESHOLDS)
 
 
+# ---- golden-cookie expected value (Lucky term only) -----------------------
+#
+# Lucky! pays min(0.15 * bank, cap) + 13, where cap = cookiesPs * 60 * 15 (15
+# minutes of CPS), raised to ~7x with "Get lucky". Since cookiesPs is live, the
+# cap auto-rises ~7x during a Frenzy. The only golden-cookie effect whose value
+# depends on your bank is Lucky, so it's the only term relevant to bank-vs-spend.
+
+_LUCKY_FRAC = 0.15
+_LUCKY_BASE_CAP_S = 15 * 60       # 15 min of CPS, the base Lucky cap
+_GET_LUCKY_CAP_MULT = 7.0          # "Get lucky" raises the cap ~7x
+
+
+def mean_spawn_interval_s(min_frames: float, max_frames: float, fps: float = 30.0) -> float:
+    """Mean seconds between golden-cookie spawns, given the game's per-frame
+    quintic spawn ramp P(spawn) = ((t-min)/(max-min))^5 once t>min."""
+    if fps <= 0 or max_frames <= min_frames:
+        return float("inf")
+    # Discrete survival sum, stepped for speed; matches the game to ~1%.
+    step = max(1, int((max_frames - min_frames) / 300))
+    surv, mean, t = 1.0, 0.0, 0.0
+    span = max_frames - min_frames
+    while surv > 1e-6 and t < max_frames * 3:
+        t += step
+        if t > min_frames:
+            p = min(1.0, ((t - min_frames) / span) ** 5)
+        else:
+            p = 0.0
+        ps = surv * (1 - (1 - p) ** step)
+        mean += ps * t
+        surv *= (1 - p) ** step
+    return mean / fps
+
+
+def lucky_cap(cookies_ps: float, get_lucky: bool) -> float:
+    """Max Lucky payout from the per-CPS cap term (the bank can't beat this)."""
+    cap = cookies_ps * _LUCKY_BASE_CAP_S
+    return cap * _GET_LUCKY_CAP_MULT if get_lucky else cap
+
+
+def marginal_bank_value_per_s(cookies: float, cookies_ps: float,
+                              mean_interval_s: float, get_lucky: bool) -> float:
+    """Cookies/sec gained by holding ONE more cookie in reserve, via Lucky.
+
+    Each Lucky pays 0.15*bank up to the cap, ~once per mean_interval. So one
+    extra banked cookie adds 0.15 per Lucky — UNTIL the bank is large enough that
+    the 15%-term exceeds the cap, after which extra banking does nothing.
+    Returns the marginal cookies/sec, directly comparable to a purchase's
+    value-per-cost (ΔCPS per cookie spent)."""
+    if mean_interval_s <= 0 or cookies_ps <= 0:
+        return 0.0
+    cap = lucky_cap(cookies_ps, get_lucky)
+    # Above the cap, the 15%-of-bank term is capped → marginal value is 0.
+    if _LUCKY_FRAC * cookies >= cap:
+        return 0.0
+    return _LUCKY_FRAC / mean_interval_s
+
+
+def lucky_reserve_target(cookies_ps: float, get_lucky: bool) -> float:
+    """Bank size where 15%-of-bank hits the Lucky cap (banking beyond is wasted)."""
+    return lucky_cap(cookies_ps, get_lucky) / _LUCKY_FRAC
+
+
 def achievement_milk_bonus_cps(cookies_ps: float) -> float:
     """Marginal CPS gained from the milk bump of crossing one achievement."""
     return _ACHIEVEMENT_CPS_FRACTION * cookies_ps
