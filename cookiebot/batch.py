@@ -59,6 +59,7 @@ class BatchABTest:
         self.variable = variable
         self.console = console or Console()
         self.procs: list[subprocess.Popen] = []
+        self._plot_proc: subprocess.Popen | None = None
         self.profiles_a: list[str] = []
         self.profiles_b: list[str] = []
         self._t0 = time.monotonic()
@@ -104,6 +105,19 @@ class BatchABTest:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
 
+    def _spawn_plot(self) -> subprocess.Popen | None:
+        """Launch the standalone live matplotlib window. Best-effort: if the GUI
+        backend isn't available (e.g. a pure SSH session) we just skip it — the
+        rich table + plotext graph still work."""
+        try:
+            return subprocess.Popen(
+                [sys.executable, "plot_batch.py"],
+                cwd=str(PROJECT_DIR),
+            )
+        except Exception:
+            log.warning("could not launch the plot window; CLI graph still active")
+            return None
+
     def run(self) -> None:
         log.info("batch A/B: %d runs per group, variable=%s", self.n, self.variable)
         self.profiles_a = self._make_group(self.cfg_a, "bat-a-")
@@ -114,6 +128,10 @@ class BatchABTest:
             self.procs.append(self._spawn(name))
             time.sleep(0.5)
         log.info("spawned %d headless instances", len(self.procs))
+
+        # Launch the live matplotlib window in its own process (decoupled — it
+        # tails the trial logs and never blocks this runner).
+        self._plot_proc = self._spawn_plot()
 
         try:
             with Live(self._render(), console=self.console, refresh_per_second=1, screen=False) as live:
@@ -134,6 +152,9 @@ class BatchABTest:
                     p.kill()
             self.console.print(self._render())
             self.console.print("\n[bold]Batch complete.[/bold] Aggregate the logs with analyze_batch.py.")
+            # Leave the plot window open so the user can inspect the final
+            # curves; it tails the logs and will simply stop updating.
+            self.console.print("[dim]The plot window stays open; close it when done.[/dim]")
 
     # ---- live aggregation -------------------------------------------------
 
