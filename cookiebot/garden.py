@@ -7,17 +7,18 @@ Pure functions (no Selenium): given a garden snapshot dict (from
 Two phases, chosen automatically from the snapshot:
 
   BREEDING — while the chosen strategy's plants aren't all unlocked yet. Switch
-  soil to mutation-favoring Wood chips, plant a checkerboard of the relevant
-  *unlocked parent* plants (any unlocked plant that is a parent of a still-locked
-  plant, read live from each plant's ``children``), and leave the alternating
-  tiles empty so mutations can roll there. Harvest mature plants on the empty
-  tiles — maturity already unlocked their seed, and harvesting frees the tile for
-  the next roll. This is a robust heuristic, not an optimal mutation solver: it
-  reliably climbs the tree toward the strategy's plants over time.
+  soil to mutation-favoring Wood chips (3x spread/mutation, when ≥300 farms),
+  plant a checkerboard of the relevant *unlocked parent* plants (any unlocked
+  plant that is a parent of a still-locked plant, read live from each plant's
+  ``children``), and leave the alternating tiles empty so mutations can roll
+  there. A seed unlocks when a mature plant of its type is HARVESTED, so we
+  harvest mature mutants off the empty tiles. This is a robust heuristic, not an
+  optimal mutation solver: it climbs the tree over time but does not guarantee
+  the rare 2-parent recipes (e.g. Juicy Queenbeet).
 
-  STEADY — once those plants are unlocked. Drop soil back to dirt and fill the
-  grid with the strategy's layout, replanting empties and clearing leftover
-  breeding plants.
+  STEADY — once those plants are unlocked. Switch soil to Clay (+25% plant
+  effects, when ≥100 farms) and fill the grid with the strategy's layout,
+  replanting empties and clearing leftover breeding plants.
 
 The seed log is never sacrificed (``M.convert`` is never called), and the garden
 is never frozen (``M.freeze`` suppresses plant effects).
@@ -32,22 +33,21 @@ STRATEGY_PLANTS = {
     "juicy": ("queenbeet", "juicyQueenbeet"),
 }
 
-WOODCHIPS_KEY = "woodchips"
-DIRT_KEY = "dirt"
+WOODCHIPS_KEY = "woodchips"   # +3x mutation/spread (req 300 farms) — breeding
+CLAY_KEY = "clay"             # +25% plant effects (req 100 farms) — steady CpS
+DIRT_KEY = "dirt"            # neutral fallback (req 0)
 
-# Spread planting over ticks: never spend the whole bank filling the grid at
-# once, and always keep a floor of unspent CpS so seeds don't dent the Lucky bank.
+# Spread planting over ticks so we never dump the whole bank into seeds at once.
 MAX_PLANTS_PER_TICK = 6
-MIN_BANK_SECONDS = 60.0
 
 
 def _index(snap: dict):
-    """Return (plants_by_key, plants_by_id, soil_id_by_key) from a snapshot."""
-    plants_by_key = {p["key"]: p for p in snap.get("plants", [])}
-    plants_by_id = {p["id"]: p for p in snap.get("plants", [])}
-    # JS object keys arrive as strings; soilNames maps id(str) -> key.
-    soil_id_by_key = {k: int(sid) for sid, k in snap.get("soilNames", {}).items()}
-    return plants_by_key, plants_by_id, soil_id_by_key
+    """Return (plants_by_key, plants_by_id, soils_by_key)."""
+    plants = snap.get("plants", [])
+    plants_by_key = {p["key"]: p for p in plants}
+    plants_by_id = {p["id"]: p for p in plants}
+    soils_by_key = {s["key"]: s for s in snap.get("soils", [])}
+    return plants_by_key, plants_by_id, soils_by_key
 
 
 def _breeding_active(strategy: str, plants_by_key: dict) -> bool:
@@ -63,9 +63,8 @@ def _relevant_parents(plants_by_key: dict) -> list[dict]:
     """Unlocked plants that are a parent of at least one still-locked plant.
 
     A plant's ``children`` lists the species it can mutate into, so an unlocked
-    plant with any locked child is worth planting — growing it gives that child a
-    chance to appear in an adjacent empty tile. Sorted by id (low tier first) for
-    deterministic placement."""
+    plant with any locked child is worth growing. Sorted by id (low tier first)
+    for deterministic placement."""
     out = []
     for p in plants_by_key.values():
         if not p["unlocked"]:
@@ -76,20 +75,44 @@ def _relevant_parents(plants_by_key: dict) -> list[dict]:
     return out
 
 
-def _can_afford(cookies: float, cookies_ps: float) -> bool:
-    """Keep a floor of unspent CpS so garden seeds never dent the Lucky bank."""
-    return cookies > cookies_ps * MIN_BANK_SECONDS
+def _seed_cost(plant: dict, cookies_ps: float) -> float:
+    """Cookie cost to plant one seed: max(costM, cookiesPs*cost*60) — the live
+    game formula (the 'Seedless to nay' 5% discount is ignored as a safe floor)."""
+    return max(float(plant.get("costM", 0.0)), cookies_ps * float(plant.get("cost", 0.0)) * 60.0)
 
 
-def _soil_action(snap: dict, soil_id_by_key: dict, want_key: str) -> list[dict]:
-    """A [soil→want] action if that soil exists, differs from current, and the
-    10-min cooldown has elapsed; else []."""
-    want = soil_id_by_key.get(want_key)
-    if want is None or snap.get("soil") == want:
+class _Budget:
+    """Tracks how many seeds we can still plant this tick without dipping the
+    spendable bank (cookies above the golden-cookie reserve) negative."""
+
+    def __init__(self, cookies: float, cookies_ps: float, reserve: float) -> None:
+        self.spendable = max(0.0, cookies - reserve)
+        self.cps = cookies_ps
+        self.planted = 0
+
+    def take(self, plant: dict) -> bool:
+        """If affordable and under the per-tick cap, debit the cost and return True."""
+        if self.planted >= MAX_PLANTS_PER_TICK:
+            return False
+        cost = _seed_cost(plant, self.cps)
+        if cost > self.spendable:
+            return False
+        self.spendable -= cost
+        self.planted += 1
+        return True
+
+
+def _soil_switch(snap: dict, soils_by_key: dict, want_key: str, farms: int) -> list[dict]:
+    """A [soil→want] action if that soil exists, differs from current, is
+    unlocked (enough farms), the 10-min cooldown elapsed, and not frozen."""
+    s = soils_by_key.get(want_key)
+    if not s or snap.get("soil") == s["id"]:
         return []
-    if snap.get("now", 0) < snap.get("nextSoil", 0):
+    if farms < s.get("req", 0):
         return []
-    return [{"op": "soil", "soil": want}]
+    if snap.get("now", 0) < snap.get("nextSoil", 0) or snap.get("freeze"):
+        return []
+    return [{"op": "soil", "soil": s["id"]}]
 
 
 def decide_actions(
@@ -98,26 +121,28 @@ def decide_actions(
     breed_soil: bool = True,
     cookies: float = 0.0,
     cookies_ps: float = 0.0,
+    reserve_cookies: float = 0.0,
 ) -> list[dict]:
     """Return the list of garden actions to apply this tick (possibly empty)."""
     if not snap or not snap.get("unlocked"):
         return []
-    plants_by_key, plants_by_id, soil_id_by_key = _index(snap)
+    plants_by_key, plants_by_id, soils_by_key = _index(snap)
     tiles = snap.get("tiles", [])
-    afford = _can_afford(cookies, cookies_ps)
+    farms = int(snap.get("farms", 0))
+    budget = _Budget(cookies, cookies_ps, reserve_cookies)
 
     if _breeding_active(strategy, plants_by_key):
-        return _breed(snap, tiles, plants_by_key, plants_by_id, soil_id_by_key,
-                      breed_soil, afford)
-    return _steady(snap, tiles, plants_by_key, plants_by_id, soil_id_by_key,
-                   strategy, afford)
+        return _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
+                      breed_soil, farms, budget)
+    return _steady(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
+                   strategy, farms, budget)
 
 
-def _breed(snap, tiles, plants_by_key, plants_by_id, soil_id_by_key,
-           breed_soil, afford) -> list[dict]:
+def _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
+           breed_soil, farms, budget) -> list[dict]:
     actions: list[dict] = []
     if breed_soil:
-        actions += _soil_action(snap, soil_id_by_key, WOODCHIPS_KEY)
+        actions += _soil_switch(snap, soils_by_key, WOODCHIPS_KEY, farms)
 
     parents = _relevant_parents(plants_by_key)
     if not parents:  # nothing reachable right now — keep low-tier rolls going
@@ -125,20 +150,25 @@ def _breed(snap, tiles, plants_by_key, plants_by_id, soil_id_by_key,
         parents = [bw] if bw else []
     if not parents:
         return actions
+    parent_keys = {p["key"] for p in parents}
 
-    planted = 0
     for t in tiles:
         x, y, tid = t["x"], t["y"], t["id"]
-        if (x + y) % 2 == 1:
-            # Mutation tile: harvest a mature plant to free it for the next roll.
-            if tid != 0 and t["mature"]:
-                actions.append({"op": "harvest", "x": x, "y": y})
-        else:
-            # Parent tile: keep a relevant parent growing here.
-            if tid == 0 and afford and planted < MAX_PLANTS_PER_TICK:
-                parent = parents[(x + 2 * y) % len(parents)]
+        even = (x + y) % 2 == 0
+        if tid != 0:
+            # Harvest matured mutants to unlock their seed and free the tile:
+            # any mature plant on a mutation (odd) tile, or a stray mature
+            # non-parent on a parent (even) tile. Leave growing plants and our
+            # productive parents alone.
+            if t["mature"]:
+                cur_key = plants_by_id.get(tid, {}).get("key")
+                if not even or cur_key not in parent_keys:
+                    actions.append({"op": "harvest", "x": x, "y": y})
+            continue
+        if even:
+            parent = parents[(x + 2 * y) % len(parents)]
+            if budget.take(parent):
                 actions.append({"op": "plant", "x": x, "y": y, "seed": parent["id"]})
-                planted += 1
     return actions
 
 
@@ -154,12 +184,14 @@ def _desired_key(x: int, y: int, strategy: str):
     return a if (x + y) % 2 == 0 else b
 
 
-def _steady(snap, tiles, plants_by_key, plants_by_id, soil_id_by_key,
-            strategy, afford) -> list[dict]:
+def _steady(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
+            strategy, farms, budget) -> list[dict]:
     actions: list[dict] = []
-    actions += _soil_action(snap, soil_id_by_key, DIRT_KEY)
+    # Clay (+25% effects) once affordable on farms, else neutral dirt.
+    clay_req = soils_by_key.get(CLAY_KEY, {}).get("req", 1 << 30)
+    want_soil = CLAY_KEY if farms >= clay_req else DIRT_KEY
+    actions += _soil_switch(snap, soils_by_key, want_soil, farms)
 
-    planted = 0
     for t in tiles:
         x, y, tid = t["x"], t["y"], t["id"]
         cur_key = plants_by_id[tid]["key"] if tid in plants_by_id else None
@@ -173,10 +205,9 @@ def _steady(snap, tiles, plants_by_key, plants_by_id, soil_id_by_key,
             continue
 
         if tid == 0:
-            want_id = plants_by_key.get(want, {}).get("id")
-            if want_id and afford and planted < MAX_PLANTS_PER_TICK:
-                actions.append({"op": "plant", "x": x, "y": y, "seed": want_id})
-                planted += 1
+            wp = plants_by_key.get(want)
+            if wp and budget.take(wp):
+                actions.append({"op": "plant", "x": x, "y": y, "seed": wp["id"]})
         elif cur_key != want:
             # Leftover breeding plant in a layout slot — clear it to replant.
             actions.append({"op": "harvest", "x": x, "y": y})

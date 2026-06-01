@@ -13,21 +13,24 @@ from cookiebot import garden  # noqa: E401
 
 # Plant catalog for the fixtures. children are wired so bakerWheat is the
 # "relevant parent" of the still-locked strategy plants in the breeding tests.
+# cost=1 → seed cost = cookies_ps*60 (cheap under RICH, expensive when cps is huge).
 _PLANTS = {
     "bakerWheat": dict(id=1, key="bakerWheat", name="Baker's wheat", mature=10,
-                       cost=0.0, children=["queenbeet", "elderwort"]),
+                       cost=1.0, costM=0.0, children=["queenbeet", "elderwort"]),
     "goldenClover": dict(id=5, key="goldenClover", name="Golden clover", mature=15,
-                         cost=0.0, children=[]),
+                         cost=1.0, costM=0.0, children=[]),
     "shimmerlily": dict(id=6, key="shimmerlily", name="Shimmerlily", mature=15,
-                        cost=0.0, children=[]),
+                        cost=1.0, costM=0.0, children=[]),
     "elderwort": dict(id=7, key="elderwort", name="Elderwort", mature=30,
-                      cost=0.0, children=[]),
+                      cost=1.0, costM=0.0, children=[]),
     "queenbeet": dict(id=20, key="queenbeet", name="Queenbeet", mature=38,
-                      cost=0.0, children=["juicyQueenbeet"]),
+                      cost=1.0, costM=0.0, children=["juicyQueenbeet"]),
     "juicyQueenbeet": dict(id=21, key="juicyQueenbeet", name="Juicy queenbeet",
-                           mature=43, cost=0.0, children=[]),
+                           mature=43, cost=1.0, costM=0.0, children=[]),
 }
-_SOILS = {"0": "dirt", "4": "woodchips"}  # JS object keys arrive as strings
+# id 0 dirt (req 0), 2 clay (req 100), 4 woodchips (req 300).
+_SOILS = [dict(key="dirt", id=0, req=0), dict(key="clay", id=2, req=100),
+          dict(key="woodchips", id=4, req=300)]
 
 
 def _plants(unlocked_keys):
@@ -50,13 +53,13 @@ def _grid(n=2, fill=None):
     return tiles
 
 
-def _snap(unlocked_keys, tiles, soil=0, now=10_000, next_soil=0):
-    return dict(unlocked=True, freeze=0, soil=soil, soilNames=_SOILS,
+def _snap(unlocked_keys, tiles, soil=0, now=10_000, next_soil=0, farms=500):
+    return dict(unlocked=True, freeze=0, soil=soil, soils=_SOILS, farms=farms,
                 nextSoil=next_soil, now=now, plants=_plants(unlocked_keys),
                 tiles=tiles)
 
 
-RICH = dict(cookies=1e12, cookies_ps=1.0)   # affordable
+RICH = dict(cookies=1e12, cookies_ps=1.0)   # affordable (seed cost ≈ 60)
 
 
 def test_locked_targets_breed_with_woodchips_and_parents():
@@ -77,13 +80,28 @@ def test_breed_harvests_mature_mutation_tile():
     assert {"op": "harvest", "x": 1, "y": 0} in acts
 
 
-def test_steady_fills_empties_and_returns_soil_to_dirt():
+def test_steady_fills_empties_and_switches_to_clay():
     snap = _snap(["bakerWheat", "queenbeet", "elderwort"], _grid(2), soil=4)
     acts = garden.decide_actions(snap, "cps", True, **RICH)
-    assert {"op": "soil", "soil": 0} in acts  # woodchips → dirt
+    assert {"op": "soil", "soil": 2} in acts  # woodchips → clay (+25% effects)
     plants = {(a["x"], a["y"]): a["seed"] for a in acts if a["op"] == "plant"}
     # checkerboard: queenbeet(20) on even, elderwort(7) on odd
     assert plants == {(0, 0): 20, (1, 1): 20, (1, 0): 7, (0, 1): 7}
+
+
+def test_steady_uses_dirt_when_too_few_farms_for_clay():
+    # < 100 farms → clay locked → fall back to dirt (and never force clay).
+    snap = _snap(["bakerWheat", "queenbeet", "elderwort"], _grid(2), soil=0, farms=40)
+    acts = garden.decide_actions(snap, "cps", True, **RICH)
+    assert not any(a["op"] == "soil" and a["soil"] == 2 for a in acts)  # no clay
+
+
+def test_breed_skips_woodchips_when_too_few_farms():
+    # < 300 farms → woodchips locked → no soil action (breeding still proceeds).
+    snap = _snap(["bakerWheat"], _grid(2), soil=0, farms=120)
+    acts = garden.decide_actions(snap, "cps", True, **RICH)
+    assert not any(a["op"] == "soil" for a in acts)
+    assert any(a["op"] == "plant" for a in acts)
 
 
 def test_steady_harvests_wrong_species():

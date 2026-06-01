@@ -407,8 +407,13 @@ if (Game.ObjectsById[2].minigame && Game.ObjectsById[2].minigame.plantsById[4].u
 GET_GARDEN_STATE = """
 var M = Game.ObjectsById[2] && Game.ObjectsById[2].minigame;
 if (!M || !M.plantsById) return {unlocked: false};
-var soilNames = {};
-for (var sk in M.soils) { var s = M.soils[sk]; soilNames[s.id] = sk; }
+// Soils are gated by farms owned (M.parent.amount >= soil.req): Fertilizer 50,
+// Clay 100, Pebbles 200, Wood chips 300. Expose id+req so Python can guard.
+var soils = [];
+for (var sk in M.soils) {
+    var s = M.soils[sk];
+    soils.push({key: sk, id: s.id, req: s.req || 0});
+}
 var plants = [];
 for (var i = 0; i < M.plantsById.length; i++) {
     var p = M.plantsById[i];
@@ -416,7 +421,7 @@ for (var i = 0; i < M.plantsById.length; i++) {
     plants.push({
         id: p.id, key: p.key, name: p.name,
         mature: p.mature, unlocked: !!p.unlocked,
-        cost: p.cost, children: (p.children || []).slice()
+        cost: p.cost, costM: p.costM, children: (p.children || []).slice()
     });
 }
 var tiles = [];
@@ -434,7 +439,8 @@ return {
     unlocked: true,
     freeze: M.freeze ? 1 : 0,
     soil: M.soil,
-    soilNames: soilNames,
+    soils: soils,
+    farms: M.parent ? M.parent.amount : 0,
     nextSoil: M.nextSoil || 0,
     now: Date.now(),
     plants: plants,
@@ -453,10 +459,15 @@ for (var i = 0; i < acts.length; i++) {
     var a = acts[i];
     try {
         if (a.op === 'soil') {
-            if (Date.now() >= (M.nextSoil || 0) && M.soil !== a.soil) {
+            // Mirror the game's own guard (we bypass its click handler): right
+            // farms owned, not frozen, off cooldown, actually changing.
+            var sObj = null;
+            for (var sk in M.soils) { if (M.soils[sk].id === a.soil) { sObj = M.soils[sk]; break; } }
+            if (sObj && !M.freeze && M.soil !== a.soil &&
+                Date.now() >= (M.nextSoil || 0) && M.parent.amount >= (sObj.req || 0)) {
+                M.toCompute = true;
                 M.soil = a.soil;
-                M.nextSoil = Date.now() + (Game.Has('Turbo-charged soil') ? 0 : 1000*60*10);
-                if (M.computeBoostPlot) M.computeBoostPlot();
+                M.nextSoil = Date.now() + (Game.Has('Turbo-charged soil') ? 1 : 1000*60*10);
                 out.soil = a.soil;
             }
         } else if (a.op === 'plant') {

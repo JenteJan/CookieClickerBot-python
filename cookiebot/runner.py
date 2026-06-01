@@ -508,9 +508,12 @@ class CookieBot:
             return  # Garden not built yet (no Farm level 1)
         self._garden_state = snap
         st = self._status
+        # Don't let seed-buying dip below the golden-cookie reserve (same rule
+        # the purchase logic uses: engaged once all 3 holding upgrades are owned).
+        reserve = self._reserve_target(st.cookies_ps) if self.golden_count == 3 else 0.0
         actions = garden.decide_actions(
             snap, self.cfg.garden_strategy, self.cfg.garden_breed_soil,
-            cookies=st.cookies, cookies_ps=st.cookies_ps,
+            cookies=st.cookies, cookies_ps=st.cookies_ps, reserve_cookies=reserve,
         )
         if not actions:
             return
