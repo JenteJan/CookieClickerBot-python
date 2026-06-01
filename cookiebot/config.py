@@ -111,6 +111,9 @@ PROFILE_FIELDS = (
     "dragon_keep_buildings",
     "disable_rendering",
     "purchase_period_s",
+    "auto_garden",
+    "garden_strategy",
+    "garden_breed_soil",
 )
 
 # The strategy variables worth A/B-testing, with their type, for the test menu.
@@ -125,6 +128,7 @@ AB_TESTABLE_FIELDS = (
     ("auto_train_dragon", "bool"),
     ("achievement_payback_cap_s", "float"),
     ("payback_cap_minutes", "float"),
+    ("auto_garden", "bool"),
 )
 
 
@@ -214,3 +218,17 @@ class Config:
     # Requires the "How to bake your dragon" heavenly upgrade.
     auto_train_dragon: bool = False
     dragon_keep_buildings: int = 100
+    # Garden minigame player. Off by default — when off, the bot keeps its old
+    # behavior (clover-spam every empty plot). When on, it runs a two-phase
+    # player: first BREED the seed log up to the chosen strategy's plants
+    # (mutation-favoring Wood chips soil), then fill the grid with a steady-state
+    # layout. The seed log is NEVER auto-sacrificed (M.convert is never called).
+    auto_garden: bool = False
+    # Steady-state layout once the strategy's plants are unlocked:
+    #   "cps"    — Queenbeet/Elderwort passive CpS boost (immortal, low micro).
+    #   "golden" — Shimmerlily/Golden clover for golden-cookie frequency.
+    #   "juicy"  — experimental Juicy Queenbeet farming (big cookie bursts).
+    garden_strategy: str = "cps"
+    # During the breeding phase, switch soil to Wood chips (favors mutations).
+    # Respects the 10-min soil cooldown. Off keeps soil on dirt (slower unlocks).
+    garden_breed_soil: bool = True

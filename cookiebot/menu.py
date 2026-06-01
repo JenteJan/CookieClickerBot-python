@@ -202,6 +202,21 @@ def _edit_settings(cfg: Config) -> None:
             default=cfg.dragon_keep_buildings,
         )
         cfg.dragon_keep_buildings = max(0, keep)
+    cfg.auto_garden = Confirm.ask(
+        "Auto-play the garden? (breed seeds, then run a steady-state layout)",
+        default=cfg.auto_garden,
+    )
+    if cfg.auto_garden:
+        cfg.garden_strategy = Prompt.ask(
+            "Garden strategy (cps = passive CpS, golden = golden-cookie freq, "
+            "juicy = Juicy Queenbeet farming)",
+            choices=["cps", "golden", "juicy"],
+            default=cfg.garden_strategy,
+        )
+        cfg.garden_breed_soil = Confirm.ask(
+            "Use Wood chips soil while breeding? (faster mutations)",
+            default=cfg.garden_breed_soil,
+        )
     save_profile_settings(cfg)
     _console.print(f"  [dim]settings saved for profile '{cfg.save_profile}'[/dim]")
 

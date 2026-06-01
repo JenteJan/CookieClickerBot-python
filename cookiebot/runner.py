@@ -13,7 +13,7 @@ from rich.live import Live
 from rich.logging import RichHandler
 from rich.panel import Panel
 
-from cookiebot import achievements, scripts
+from cookiebot import achievements, garden, scripts
 from cookiebot.config import (
     AUTOCLICK_COOKIE_MS,
     AUTOCLICK_GOLDEN_MS,
@@ -123,6 +123,8 @@ class CookieBot:
         self._tier_bundles: list[dict] = []
         # Golden-cookie spawn timing for the dynamic reserve, refreshed slowly.
         self._golden_timing: dict = {}
+        # Last garden snapshot (cheap; refreshed each garden tick when auto_garden).
+        self._garden_state: dict = {}
         # Best purchase value-per-cost this tick; the dynamic reserve compares
         # the marginal banking value against it.
         self._best_purchase_score: float = 0.0
@@ -484,12 +486,44 @@ class CookieBot:
     def minigame_tick(self) -> None:
         self.driver.execute_script(scripts.FARM_SUGAR_LUMPS)
         self.driver.execute_script(scripts.BUY_PLEDGE)
-        self.driver.execute_script(scripts.PLANT_CLOVERS)
+        self.garden_tick()
         self.driver.execute_script(scripts.CHECK_STOCK_MARKET)
         self.driver.execute_script(scripts.SET_PANTHEON)
         if self.cfg.auto_pop_wrinklers_in_frenzy:
             if self.driver.execute_script(scripts.POP_WRINKLERS_IF_FRENZY):
                 self._status.update(last_action="popped wrinklers (frenzy)")
+
+    def garden_tick(self) -> None:
+        """Play the Garden: breed the seed log up, then run the chosen layout.
+        When auto_garden is off, preserve the old clover-spam behavior."""
+        if not self.cfg.auto_garden:
+            self.driver.execute_script(scripts.PLANT_CLOVERS)
+            return
+        try:
+            snap = self.driver.execute_script(scripts.GET_GARDEN_STATE)
+        except Exception:
+            log.exception("garden snapshot failed")
+            return
+        if not snap or not snap.get("unlocked"):
+            return  # Garden not built yet (no Farm level 1)
+        self._garden_state = snap
+        st = self._status
+        actions = garden.decide_actions(
+            snap, self.cfg.garden_strategy, self.cfg.garden_breed_soil,
+            cookies=st.cookies, cookies_ps=st.cookies_ps,
+        )
+        if not actions:
+            return
+        try:
+            res = self.driver.execute_script(scripts.GARDEN_ACTIONS, actions) or {}
+        except Exception:
+            log.exception("garden actions failed")
+            return
+        planted, harvested = int(res.get("planted", 0)), int(res.get("harvested", 0))
+        if planted or harvested:
+            self._status.update(
+                last_action=f"garden: +{planted} planted / -{harvested} harvested"
+            )
 
     def _init_trial_log(self) -> None:
         if not self.cfg.ab_log:

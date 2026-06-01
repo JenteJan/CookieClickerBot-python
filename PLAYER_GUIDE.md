@@ -123,9 +123,15 @@ specific window state, or a deliberate run style.
   / heart drops and finish each set (needs *Season switcher* to change seasons).
   The bot pops shimmers so it gathers reindeer/eggs passively, but won't switch
   seasons or track completion.
-- ⚪ **Garden achievements** — unlock every seed, freeze the garden, harvest rare
-  plants (Queenbeet / Elderwort / etc.). The bot only clover-spams; the garden
-  meta-game is yours.
+- 🟡 **Garden achievements** — with `auto_garden` on, the bot plays the garden in
+  two phases: it **breeds the seed log** (mutation-favoring Wood chips soil, a
+  checkerboard of relevant parent plants, harvesting mutants as they mature) until
+  the chosen strategy's plants are unlocked, then fills the grid with a
+  steady-state layout (`garden_strategy`: `cps` Queenbeet/Elderwort CpS boost,
+  `golden` golden-cookie frequency, or `juicy` Juicy Queenbeet farming). It never
+  sacrifices the seed log and never freezes (freezing suppresses plant effects),
+  so the freeze/seed-log-sacrifice achievements are still yours. With `auto_garden`
+  off it falls back to the old clover-spam.
 - ⚪ **Wholesome** — unlock 100% of your heavenly-chips power (a heavenly-upgrade
   milestone; see §1).
 - ⚪ **Building-count / cookies-baked / clicking-count / "play for N days" tiers**

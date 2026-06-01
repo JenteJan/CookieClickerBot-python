@@ -391,6 +391,94 @@ if (Game.ObjectsById[2].minigame && Game.ObjectsById[2].minigame.plantsById[4].u
 }
 """
 
+# ---- Garden (Farm minigame) -------------------------------------------------
+#
+# One read + one batched write per garden tick. The Python side (cookiebot.garden)
+# decides every move from the snapshot; GARDEN_ACTIONS just applies the list.
+#
+# Garden API (M = Game.ObjectsById[2].minigame):
+#   M.getTile(x,y) -> [plantId, age]   (0 = empty)
+#   M.isTileUnlocked(x,y)              (which plots the current Farm level opened)
+#   M.plantsById[id]: {key,name,mature,unlocked,children,cost}
+#   M.useTool(seedId,x,y)              plant a seed on an empty tile
+#   M.harvest(x,y)                     remove a plant (maturity already unlocked it)
+#   M.soil / M.soils / M.nextSoil      soil index / defs / cooldown timestamp(ms)
+# Maturity: age >= plant.mature. We never freeze (M.freeze suppresses effects).
+GET_GARDEN_STATE = """
+var M = Game.ObjectsById[2] && Game.ObjectsById[2].minigame;
+if (!M || !M.plantsById) return {unlocked: false};
+var soilNames = {};
+for (var sk in M.soils) { var s = M.soils[sk]; soilNames[s.id] = sk; }
+var plants = [];
+for (var i = 0; i < M.plantsById.length; i++) {
+    var p = M.plantsById[i];
+    if (!p || !p.key) continue;  // slot 0 / empties are undefined
+    plants.push({
+        id: p.id, key: p.key, name: p.name,
+        mature: p.mature, unlocked: !!p.unlocked,
+        cost: p.cost, children: (p.children || []).slice()
+    });
+}
+var tiles = [];
+for (var y = 0; y < 6; y++) {
+    for (var x = 0; x < 6; x++) {
+        if (!M.isTileUnlocked(x, y)) continue;
+        var t;
+        try { t = M.getTile(x, y); } catch (e) { continue; }
+        var id = t[0], age = t[1];
+        var matureAge = (id && M.plantsById[id]) ? M.plantsById[id].mature : 0;
+        tiles.push({x: x, y: y, id: id, age: age, mature: id !== 0 && age >= matureAge});
+    }
+}
+return {
+    unlocked: true,
+    freeze: M.freeze ? 1 : 0,
+    soil: M.soil,
+    soilNames: soilNames,
+    nextSoil: M.nextSoil || 0,
+    now: Date.now(),
+    plants: plants,
+    tiles: tiles
+};
+"""
+
+# Apply a list of action dicts (arguments[0]); each move is independently
+# guarded so one failure can't abort the batch. Returns simple counts.
+GARDEN_ACTIONS = """
+var M = Game.ObjectsById[2] && Game.ObjectsById[2].minigame;
+var acts = arguments[0] || [];
+var out = {planted: 0, harvested: 0, soil: -1};
+if (!M) return out;
+for (var i = 0; i < acts.length; i++) {
+    var a = acts[i];
+    try {
+        if (a.op === 'soil') {
+            if (Date.now() >= (M.nextSoil || 0) && M.soil !== a.soil) {
+                M.soil = a.soil;
+                M.nextSoil = Date.now() + (Game.Has('Turbo-charged soil') ? 0 : 1000*60*10);
+                if (M.computeBoostPlot) M.computeBoostPlot();
+                out.soil = a.soil;
+            }
+        } else if (a.op === 'plant') {
+            // Proven path (see PLANT_CLOVERS): select the seed, click the empty
+            // tile. clickTile plants the selected seed on an empty plot.
+            if (M.getTile(a.x, a.y)[0] === 0) {
+                M.seedSelected = a.seed;
+                M.clickTile(a.x, a.y);
+                out.planted++;
+            }
+        } else if (a.op === 'harvest') {
+            if (M.getTile(a.x, a.y)[0] !== 0) {
+                M.harvest(a.x, a.y);
+                out.harvested++;
+            }
+        }
+    } catch (e) {}
+}
+M.seedSelected = -1;
+return out;
+"""
+
 # Cast Force the Hand of Fate (spellsById[1]) when a frenzy-stack is up — it
 # spawns a golden cookie whose Lucky! payout scales with the bank, so during a
 # Frenzy this is the big combo. If a really juicy combo lands a moment later
