@@ -221,7 +221,7 @@ class CookieBot:
     def _load_upgrade_catalog(self) -> None:
         raw = self.driver.execute_script(scripts.GET_ALL_UPGRADES)
         ach = 0
-        for uid, desc, base_price, name in raw:
+        for uid, desc, base_price, name, pool in raw:
             unlocks = is_achievement_unlock_upgrade(name or "")
             ach += int(unlocks)
             self.upgrades_by_id[int(uid)] = Upgrade(
@@ -230,6 +230,7 @@ class CookieBot:
                 base_price=float(base_price),
                 unlocks_achievement=unlocks,
                 name=name or f"upgrade #{uid}",
+                pool=pool or "",
             )
         log.info("indexed %d upgrades (%d flagged as achievement-unlocks)",
                  len(self.upgrades_by_id), ach)
@@ -309,7 +310,9 @@ class CookieBot:
             (uid, upgrade_score(uid))
             for uid in store_prices
             if uid in self.upgrades_by_id
-            and not is_never_buy_upgrade(self.upgrades_by_id[uid].name)
+            and not is_never_buy_upgrade(
+                self.upgrades_by_id[uid].name, self.upgrades_by_id[uid].pool
+            )
         ]
         best_upgrade = max(scored_upgrades, key=lambda x: x[1], default=(None, 0.0))
 

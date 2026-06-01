@@ -26,6 +26,7 @@ class Upgrade(NamedTuple):
     base_price: float
     unlocks_achievement: bool = False
     name: str = ""
+    pool: str = ""
 
 
 # Marginal CPS bonus from a single new achievement. Each achievement adds +4%

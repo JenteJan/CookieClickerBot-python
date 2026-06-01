@@ -132,8 +132,10 @@ return {
 GET_ALL_UPGRADES = """
 return Object.values(Game.Upgrades).map(function(u) {
     // dname is the human-facing display name (localized); name is the internal
-    // key. Prefer dname so the UI never shows an internal id.
-    return [u.id, u.desc, u.basePrice, u.dname || u.name];
+    // key. Prefer dname so the UI never shows an internal id. pool tags the
+    // upgrade kind ('' normal, 'cookie' flavored CpS, 'toggle'/'switch' the
+    // Golden switch / Shimmering veil / cosmetic selectors we must never buy).
+    return [u.id, u.desc, u.basePrice, u.dname || u.name, u.pool || ''];
 });
 """
 

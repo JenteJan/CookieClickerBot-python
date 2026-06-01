@@ -68,19 +68,28 @@ OBJECT_NAMES = [
 # the bot think all three were owned at run start and bank 100 min immediately.
 GOLDEN_COOKIE_UPGRADE_NAMES = ["Lucky day", "Serendipity", "Get lucky"]
 
-# Upgrades the bot must never auto-buy. The Golden Switch trades the ability to
-# interact with golden cookies for a flat +50% passive CpS — a bad deal for THIS
-# bot, which autoclicks every golden cookie (Frenzy ×7, click frenzies, and Lucky
-# payouts far exceed a permanent +50%). Both scoring paths otherwise rank it at
-# the top: the description parser sees "golden cookie" and the payback path sees
-# the +50% as a huge true marginal. Matched case-insensitively against the live
-# store name, which carries an [off]/[on] toggle suffix, so we match the prefix.
-NEVER_BUY_UPGRADE_PREFIXES = ("golden switch",)
+# Upgrades the bot must never auto-buy: the Golden switch and Shimmering veil
+# (flat passive CpS in exchange for breaking golden-cookie / clicking play, a bad
+# deal for THIS bot) and the cosmetic selectors (milk / background / sound). They
+# aren't real upgrades — they toggle a mode — yet both scoring paths rank them at
+# the top (the parser sees "golden cookie"/"+%", the payback path sees the flat
+# CpS as a huge true marginal). The game tags every one of them with a non-empty
+# `pool` ('toggle'/'switch'), and every toggle's store name carries an [off]/[on]
+# marker — we exclude on BOTH signals so a single quirk can't let one slip through.
+NEVER_BUY_UPGRADE_POOLS = frozenset({"toggle", "switch"})
+# Belt-and-suspenders name match (pool-independent), case-insensitive.
+NEVER_BUY_UPGRADE_PREFIXES = ("golden switch", "shimmering veil")
 
 
-def is_never_buy_upgrade(name: str) -> bool:
-    """True if ``name`` is an upgrade the bot should never auto-purchase."""
+def is_never_buy_upgrade(name: str, pool: str = "") -> bool:
+    """True if an upgrade should never be auto-purchased — identified by its
+    pool (toggle/switch) or by its name (an [off]/[on] toggle marker, or a known
+    prefix). Either signal is sufficient."""
+    if (pool or "").strip().lower() in NEVER_BUY_UPGRADE_POOLS:
+        return True
     n = (name or "").strip().lower()
+    if "[off]" in n or "[on]" in n:
+        return True
     return any(n.startswith(p) for p in NEVER_BUY_UPGRADE_PREFIXES)
 
 AUTOCLICK_COOKIE_MS = 25
