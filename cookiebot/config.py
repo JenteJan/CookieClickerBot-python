@@ -68,6 +68,21 @@ OBJECT_NAMES = [
 # the bot think all three were owned at run start and bank 100 min immediately.
 GOLDEN_COOKIE_UPGRADE_NAMES = ["Lucky day", "Serendipity", "Get lucky"]
 
+# Upgrades the bot must never auto-buy. The Golden Switch trades the ability to
+# interact with golden cookies for a flat +50% passive CpS — a bad deal for THIS
+# bot, which autoclicks every golden cookie (Frenzy ×7, click frenzies, and Lucky
+# payouts far exceed a permanent +50%). Both scoring paths otherwise rank it at
+# the top: the description parser sees "golden cookie" and the payback path sees
+# the +50% as a huge true marginal. Matched case-insensitively against the live
+# store name, which carries an [off]/[on] toggle suffix, so we match the prefix.
+NEVER_BUY_UPGRADE_PREFIXES = ("golden switch",)
+
+
+def is_never_buy_upgrade(name: str) -> bool:
+    """True if ``name`` is an upgrade the bot should never auto-purchase."""
+    n = (name or "").strip().lower()
+    return any(n.startswith(p) for p in NEVER_BUY_UPGRADE_PREFIXES)
+
 AUTOCLICK_COOKIE_MS = 25
 AUTOCLICK_GOLDEN_MS = 1000
 

@@ -19,6 +19,7 @@ from cookiebot.config import (
     AUTOCLICK_GOLDEN_MS,
     GOLDEN_COOKIE_UPGRADE_NAMES,
     Config,
+    is_never_buy_upgrade,
     profile_backups_dir,
     profile_save_file,
     profile_trials_dir,
@@ -306,6 +307,7 @@ class CookieBot:
             (uid, upgrade_score(uid))
             for uid in store_prices
             if uid in self.upgrades_by_id
+            and not is_never_buy_upgrade(self.upgrades_by_id[uid].name)
         ]
         best_upgrade = max(scored_upgrades, key=lambda x: x[1], default=(None, 0.0))
 
