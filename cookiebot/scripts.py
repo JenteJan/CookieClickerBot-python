@@ -525,7 +525,14 @@ if (activeFrenzyBuffs().length >= 2) {
                 Game.ObjectsById[7].sell(400);
                 var bank = Game.ObjectsById[5].minigame;
                 if (bank) {
-                    bank.takeLoan(1); bank.takeLoan(2); bank.takeLoan(3);
+                    // takeLoan() does NOT check the unlock gate — calling it on a
+                    // locked loan still spends the 20-50%-of-bank downpayment. Gate
+                    // on office level using the game's own thresholds (loan 1 > 1,
+                    // loan 2 > 3). Loan 3 is skipped on purpose: +20% for 2 days
+                    // then -20% for 5 days is the opposite of a burst. takeLoan
+                    // already no-ops a loan that's currently active.
+                    if (bank.officeLevel > 1) bank.takeLoan(1);
+                    if (bank.officeLevel > 3) bank.takeLoan(2);
                 }
                 wiz.castSpell(wiz.spellsById[1]);
             }
@@ -547,14 +554,25 @@ if (pledge && pledge.unlocked == 1 && pledge.bought == 0 && Game.cookies >= pled
 }
 """
 
+# Max-burst combo pantheon. Slots are 0=Diamond (strongest), 1=Ruby, 2=Jade.
+#   Diamond: Godzamok (Ruin, id 2) — selling buildings triggers a big click buff
+#            scaled by how many were sold. THE combo engine: the FtHoF combo above
+#            sells 400 wizard towers, so this fires right as the autoclicker stacks
+#            on Frenzy + Click frenzy + Dragonflight.
+#   Ruby:    Muridal (Labor, id 6) — clicking is X% more powerful.
+#   Jade:    Mokalsium (Mother, id 8) — milk/CpS multiplier (no downside).
+# Swaps are scarce (max 3, regenerate over hours), so only move a god that's NOT
+# already in its target slot, and only while a swap is available — never burn
+# swaps re-slotting an already-correct setup. Initial setup costs 3 swaps once.
 SET_PANTHEON = """
 var temple = Game.ObjectsById[6];
-if (temple.level != 0 && temple.minigame) {
-    try {
-        temple.minigame.slotGod(temple.minigame.godsById[1], 1);
-        temple.minigame.slotGod(temple.minigame.godsById[6], 2);
-        temple.minigame.slotGod(temple.minigame.godsById[8], 3);
-    } catch (error) {}
+var M = temple && temple.minigame;
+if (!M || temple.level == 0 || !M.slot) return;
+var want = [2, 6, 8];  // [Diamond, Ruby, Jade]
+for (var slot = 0; slot < 3; slot++) {
+    if (M.slot[slot] === want[slot]) continue;  // already correct
+    if (M.swaps <= 0) break;                     // out of swaps; revisit later
+    try { M.slotGod(M.godsById[want[slot]], slot); } catch (e) {}
 }
 """
 
@@ -584,14 +602,9 @@ function tryLevel(obj) {
         var was = obj.level;
         obj.levelUp(false);
         if (obj.level > was) {
-            // Slot the pantheon gods the moment the Temple unlocks its minigame.
-            if (obj.id == 6 && obj.minigame) {
-                try {
-                    obj.minigame.slotGod(obj.minigame.godsById[1], 1);
-                    obj.minigame.slotGod(obj.minigame.godsById[6], 2);
-                    obj.minigame.slotGod(obj.minigame.godsById[8], 3);
-                } catch (e) {}
-            }
+            // The pantheon is slotted by SET_PANTHEON on the minigame tick (it
+            // owns the correct slots + swap-safety), so no slotting here — this
+            // just unlocks the Temple's minigame by reaching level 1.
             return true;
         }
     }
