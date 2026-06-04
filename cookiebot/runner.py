@@ -504,44 +504,51 @@ class CookieBot:
                 top = ("b", best_b["name"], best_b["price"], b_score)
             else:
                 break
-            if top[3] < min_score:
-                break
 
             # Past the first (exact) buy, only fast-path pocket-change items; a
             # pricier one is a real save-up decision, deferred to the next tick.
             too_pricey = i > 0 and top[2] > bank * cheap_fraction
 
             if not too_pricey and affordable(top[2]):
+                # The best item is affordable — buy it. (No payback-cap gate here:
+                # buying any positive-CpS item beats idling, which is what the cap
+                # used to cause — the "scored below threshold" stalls.)
                 choice = top
             elif i > 0:
                 break  # batch continuation only fast-paths cheap, affordable buys
             else:
-                # First buy and the top item is unaffordable. Bank for it only if
-                # it's reachable soon; if it's far off, buy the best AFFORDABLE item
-                # instead so we keep compounding rather than idle for hours. A
-                # negative/zero wait means the reserve (not the price) is blocking —
-                # leave that alone so golden-cookie banking is preserved.
-                wait_s = (top[2] - bank) / cookies_ps if cookies_ps > 0 else float("inf")
-                if wait_s <= self.cfg.bank_horizon_s:
-                    break
-                ab = max(
-                    (d for d in bmodel.values()
-                     if d["score"] >= min_score and affordable(d["price"])),
-                    key=lambda d: d["score"], default=None,
-                )
-                au = max(
-                    (uid for uid in umodel
-                     if umodel[uid]["score"] >= min_score and affordable(umodel[uid]["price"])),
-                    key=lambda uid: umodel[uid]["score"], default=None,
-                )
+                # First buy, top item unaffordable. Buy the best AFFORDABLE item to
+                # keep compounding — UNLESS banking for the far better item is truly
+                # worth it. "Worth it" = the wait is shorter than how much SOONER the
+                # top recoups its cost than the best affordable buy (its payback
+                # ADVANTAGE = 1/score_aff − 1/score_top, in seconds). That threshold
+                # is stage-adaptive: paybacks lengthen as the game slows, so the
+                # tolerated wait grows on its own — no flat constant. It also shrinks
+                # to ~0 when the affordable item is nearly as efficient as the top
+                # (then just buy it). bank_horizon_s only caps it as a safety ceiling.
+                ab = max((d for d in bmodel.values() if affordable(d["price"])),
+                         key=lambda d: d["score"], default=None)
+                au = max((uid for uid in umodel if affordable(umodel[uid]["price"])),
+                         key=lambda uid: umodel[uid]["score"], default=None)
                 ab_score = ab["score"] if ab is not None else float("-inf")
                 au_score = umodel[au]["score"] if au is not None else float("-inf")
                 if au is not None and au_score >= ab_score:
-                    choice = ("u", au, umodel[au]["price"], au_score)
+                    best_aff = ("u", au, umodel[au]["price"], au_score)
                 elif ab is not None:
-                    choice = ("b", ab["name"], ab["price"], ab["score"])
+                    best_aff = ("b", ab["name"], ab["price"], ab["score"])
                 else:
-                    break  # nothing affordable — bank
+                    break  # nothing affordable -> bank (reserve, or can't afford anything)
+
+                wait_s = (top[2] - bank) / cookies_ps if cookies_ps > 0 else float("inf")
+                payback_top = 1.0 / top[3] if top[3] > 0 else float("inf")
+                payback_aff = 1.0 / best_aff[3] if best_aff[3] > 0 else float("inf")
+                worth_waiting = min(payback_aff - payback_top, self.cfg.bank_horizon_s)
+                # wait<=0 = the reserve (not price) blocks the top -> bank (golden
+                # saving). Don't bank for a top below the payback cap either.
+                cap_ok = min_score <= 0 or top[3] >= min_score
+                if wait_s <= 0 or (cap_ok and wait_s < worth_waiting):
+                    break  # bank for the clearly-better, soon-enough top item
+                choice = best_aff
 
             kind, ref, price, sc = choice
             if kind == "u":
@@ -718,7 +725,9 @@ class CookieBot:
 
     def minigame_tick(self) -> None:
         self.driver.execute_script(scripts.FARM_SUGAR_LUMPS)
-        self.driver.execute_script(scripts.BUY_PLEDGE)
+        if self.cfg.auto_pledge:
+            # Calms the Grandmapocalypse — off by default so wrinklers keep spawning.
+            self.driver.execute_script(scripts.BUY_PLEDGE)
         self.garden_tick()
         self.driver.execute_script(scripts.CHECK_STOCK_MARKET)
         self.driver.execute_script(scripts.SET_PANTHEON)

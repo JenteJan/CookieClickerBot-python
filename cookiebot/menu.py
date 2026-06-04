@@ -209,6 +209,8 @@ def _settings_entries() -> list:
              "Wrinklers (hold = manual 'w'; pop-when-full = reclaim at max slots; "
              "always = pop continuously). Pops before ascend + farms Halloween either way",
              choices=["hold", "pop-when-full", "always"], default=c.wrinkler_strategy))),
+        _bool_entry("Calm Grandmapocalypse (Elder Pledge)", "auto_pledge",
+                    "Auto-buy Elder Pledge to calm the Grandmapocalypse? (suppresses wrinklers — usually leave off)"),
         _bool_entry("Payback purchase mode", "payback_mode", "Use experimental payback-time purchase mode?"),
         ("Payback cap", lambda c: f"{c.payback_cap_minutes:g} min" if c.payback_cap_minutes else "[dim]no cap[/dim]",
          lambda c: setattr(c, "payback_cap_minutes", max(0.0, FloatPrompt.ask("Skip buys slower to pay off than how many minutes? (0 = no cap)", default=c.payback_cap_minutes)))),

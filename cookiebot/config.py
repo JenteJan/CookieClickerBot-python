@@ -113,6 +113,7 @@ PROFILE_FIELDS = (
     "auto_fire_risky_achievements",
     "auto_pop_wrinklers_in_frenzy",
     "wrinkler_strategy",
+    "auto_pledge",
     "payback_mode",
     "payback_cap_minutes",
     "bulk_buy",
@@ -236,6 +237,12 @@ class Config:
     # total) and pops aggressively while in the Halloween season (each pop can drop
     # a spooky-cookie upgrade).
     wrinkler_strategy: str = "pop-when-full"
+    # Auto-buy "Elder Pledge" to CALM the Grandmapocalypse. OFF by default: the
+    # Grandmapocalypse is what spawns wrinklers (the 1.1x/3.3x cookie engine above)
+    # and the Halloween spooky-cookie drops, so repeatedly calming it suppresses
+    # exactly what the wrinkler strategy is farming. Turn on only if you'd rather
+    # keep golden cookies clean (no wrath cookies) at the cost of all wrinkler value.
+    auto_pledge: bool = False
     # Experimental payback-time purchase mode (guide §18.3). vs the default
     # value/cost heuristic it adds: (1) the achievement-milk bonus to building
     # buys that cross a count threshold (the default mode only credits upgrades),
@@ -265,14 +272,16 @@ class Config:
     # buys you could afford 50× over. Lower = stricter/more accurate, slower
     # catch-up; raise toward 1.0 to batch more aggressively. 0 = one buy per tick.
     bulk_cheap_fraction: float = 0.02
-    # Banking horizon. The bot buys the best value-per-cost item, banking when it's
-    # unaffordable — but banking forfeits the compounding of cheaper buys you could
-    # make meanwhile. So bank for the top item only if it's reachable within this
-    # many seconds of CpS; if it's further off, buy the best AFFORDABLE item instead
-    # (keep compounding) and revisit the big one as the bank grows. Prevents the bot
-    # idling for hours saving for one far-off upgrade. The golden-cookie reserve is
-    # still honoured (a negative/zero wait = reserve banking, left untouched).
-    bank_horizon_s: float = 180.0
+    # Safety ceiling (seconds) on how long the bot will bank for a better, not-yet-
+    # affordable item. The PRIMARY rule is dynamic and needs no constant: the bot
+    # banks for the top value/cost item only while the wait is shorter than how much
+    # SOONER it recoups its price than the best affordable buy (its payback
+    # advantage, 1/score_aff − 1/score_top in seconds). That threshold scales with
+    # the game on its own — short waits early (paybacks are seconds), longer later
+    # (paybacks are hours) — and shrinks to ~0 when something nearly as good is
+    # affordable (then just buy it). This constant only clamps the worst case so the
+    # bot can't idle absurdly long. Set higher to allow longer end-game saves.
+    bank_horizon_s: float = 3600.0
     # Auto-ascension. Off by default — ascending is a soft reset. When on, the
     # bot reincarnates once ascending now would raise prestige level by at least
     # auto_ascend_gain_pct (relative to current). Heavenly chips persist unspent.
