@@ -178,7 +178,7 @@ class CookieBot:
         ))
         self._status.update(
             golden_count=self.golden_count,
-            wrinkler_auto_frenzy=self.cfg.auto_pop_wrinklers_in_frenzy,
+            wrinkler_strategy=self.cfg.wrinkler_strategy,
             last_action="setup complete",
         )
         self.driver.execute_script(scripts.SET_PANTHEON)
@@ -194,6 +194,11 @@ class CookieBot:
             log.info("dynamic golden-cookie reserve on")
         log.info("setup complete; %d golden cookie upgrades owned, %d achievements",
                  self.golden_count, self._status.achievements_owned)
+        try:
+            if self.driver.execute_script(scripts.CLEAR_STUCK_SPECIAL_MENU):
+                log.info("cleared a stuck dragon/Santa popup left open from a prior run")
+        except Exception:
+            log.exception("special-menu cleanup failed")
         try:
             diag = self.driver.execute_script(scripts.DIAGNOSE_DRAGON_SEASON)
             log.info("DIAG dragon/season: %s", diag)
@@ -672,9 +677,32 @@ class CookieBot:
         self.garden_tick()
         self.driver.execute_script(scripts.CHECK_STOCK_MARKET)
         self.driver.execute_script(scripts.SET_PANTHEON)
-        if self.cfg.auto_pop_wrinklers_in_frenzy:
-            if self.driver.execute_script(scripts.POP_WRINKLERS_IF_FRENZY):
-                self._status.update(last_action="popped wrinklers (frenzy)")
+        self._wrinkler_tick()
+
+    def _wrinkler_tick(self) -> None:
+        """Realise wrinkler value per the chosen strategy. Payout is 1.1x (3.3x
+        shiny) of cookies DIGESTED, independent of CpS at pop time — so we pop to
+        reclaim+reinvest and to cycle slots (shiny rolls / Halloween drops), NOT on
+        Frenzy. Holding just locks the eaten cookies (≈50-70% of CpS at max slots)."""
+        st = self.driver.execute_script(scripts.WRINKLER_STATE) or {}
+        count, mx = int(st.get("count", 0)), int(st.get("max", 0))
+        sucked, shiny = float(st.get("sucked", 0.0)), int(st.get("shiny", 0))
+        self._status.update(wrinkler_count=count, wrinkler_max=mx,
+                            wrinkler_sucked=sucked, wrinkler_shiny=shiny)
+        if count == 0 or sucked <= 0:
+            return
+        halloween = st.get("season") == "halloween"
+        strat = self.cfg.wrinkler_strategy
+        if strat == "hold" and not halloween:
+            return  # let them fatten; 'w' pops manually
+        # Halloween or "always" → pop whenever anything's eaten (cycle for drops /
+        # shiny). "pop-when-full" → pop the batch once every slot is occupied.
+        pop = halloween or strat == "always" or (mx > 0 and count >= mx)
+        if pop:
+            self.driver.execute_script(scripts.POP_WRINKLERS)
+            tag = " (Halloween farm)" if halloween else ""
+            self._status.update(last_action=f"popped {count} wrinklers{tag}",
+                                wrinkler_count=0, wrinkler_sucked=0.0, wrinkler_shiny=0)
 
     def garden_tick(self) -> None:
         """Play the Garden: breed the seed log up, then run the chosen layout.
@@ -955,6 +983,9 @@ class CookieBot:
             return
         log.info("auto-ascend: prestige %.0f → %.0f (+%.0f, %.1f%%)",
                  prestige, potential, gain, gain_pct)
+        # Realise all wrinklers FIRST: their digested cookies count toward the
+        # ascension total only once popped, otherwise they're lost on the reset.
+        self.driver.execute_script(scripts.POP_WRINKLERS)
         # Save before the reset so a crash mid-ascension can't lose progress.
         write_save(self.driver, self.save_file)
         self.driver.execute_script(scripts.DO_ASCEND)

@@ -46,8 +46,12 @@ class BotStatus:
     golden_count: int = 0
     achievements_owned: int = 0
     paused: bool = False
-    # True = auto-pop wrinklers during Frenzy; False = hold (manual 'w' to pop).
-    wrinkler_auto_frenzy: bool = False
+    # Wrinkler tactic + live attached state.
+    wrinkler_strategy: str = "pop-when-full"
+    wrinkler_count: int = 0
+    wrinkler_max: int = 0
+    wrinkler_sucked: float = 0.0
+    wrinkler_shiny: int = 0
     last_action: str = "(starting up)"
     # Top heuristic candidates: (label, score, affordable_now)
     next_buys: List[Tuple[str, float, bool]] = field(default_factory=list)
@@ -150,6 +154,17 @@ def _format_holidays(status: BotStatus) -> str:
     return "\n".join(lines) if lines else "[dim]—[/]"
 
 
+def _format_wrinklers(status: BotStatus) -> str:
+    """Strategy + attached count / max, plus stored cookies and any shiny."""
+    cap = f"/{status.wrinkler_max}" if status.wrinkler_max else ""
+    parts = [f"{status.wrinkler_strategy}", f"{status.wrinkler_count}{cap} attached"]
+    if status.wrinkler_sucked > 0:
+        parts.append(f"{format_number(status.wrinkler_sucked)} stored")
+    if status.wrinkler_shiny:
+        parts.append(f"[bold magenta]{status.wrinkler_shiny} shiny![/]")
+    return " · ".join(parts)
+
+
 def render(status: BotStatus) -> Panel:
     uptime = format_duration(time.monotonic() - status.started_at)
     state = "[yellow]paused[/]" if status.paused else "[green]running[/]"
@@ -166,7 +181,7 @@ def render(status: BotStatus) -> Panel:
     grid.add_row("target bank", _format_reserve_target(status))
     grid.add_row("golden upgrades", f"{status.golden_count}/3")
     grid.add_row("achievements", f"{status.achievements_owned}")
-    grid.add_row("wrinklers", "auto-pop (frenzy)" if status.wrinkler_auto_frenzy else "holding")
+    grid.add_row("wrinklers", _format_wrinklers(status))
     grid.add_row("last action", status.last_action)
     grid.add_row("next buys", _format_next_buys(status.next_buys))
 

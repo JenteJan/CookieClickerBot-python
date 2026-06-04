@@ -112,6 +112,7 @@ PROFILE_FIELDS = (
     "auto_fire_safe_achievements",
     "auto_fire_risky_achievements",
     "auto_pop_wrinklers_in_frenzy",
+    "wrinkler_strategy",
     "payback_mode",
     "payback_cap_minutes",
     "bulk_buy",
@@ -214,10 +215,24 @@ class Config:
     # you'd rather earn them organically.
     auto_fire_safe_achievements: bool = True
     auto_fire_risky_achievements: bool = True
-    # Hold wrinklers (they accumulate eaten cookies) and pop them only while a
-    # CpS-multiplying buff like Frenzy is active, capturing the inflated payout.
-    # The 'w' hotkey always pops on demand regardless of this setting.
+    # DEPRECATED (kept so old saves load) — superseded by wrinkler_strategy. The
+    # "pop during Frenzy" idea was a myth: a wrinkler returns 1.1x (3.3x shiny) of
+    # the cookies it DIGESTED over its lifespan, independent of CpS at pop time, so
+    # popping during a buff gives no bonus.
     auto_pop_wrinklers_in_frenzy: bool = False
+    # Wrinkler tactic. Each wrinkler eats ~5% of CpS (≈50-70% total at max slots)
+    # and stores it, paying back 1.1x (3.3x shiny) of the total digested when
+    # popped — so you MUST pop to realise the value and reinvest it (popping is
+    # net positive; the Frenzy timing is irrelevant). Strategies:
+    #   "hold"          - never auto-pop; you pop manually with 'w'
+    #   "pop-when-full" - pop all once every slot is filled (reclaim + reinvest +
+    #                     cycle slots to roll the 0.01% shiny). Default.
+    #   "always"        - pop as soon as any wrinkler has eaten (max cycling)
+    # Regardless of strategy the bot ALWAYS pops everything right before an
+    # auto-ascend (un-popped wrinkler cookies are otherwise lost from the prestige
+    # total) and pops aggressively while in the Halloween season (each pop can drop
+    # a spooky-cookie upgrade).
+    wrinkler_strategy: str = "pop-when-full"
     # Experimental payback-time purchase mode (guide §18.3). vs the default
     # value/cost heuristic it adds: (1) the achievement-milk bonus to building
     # buys that cross a count threshold (the default mode only credits upgrades),

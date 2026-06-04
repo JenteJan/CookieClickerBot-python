@@ -204,8 +204,11 @@ def _settings_entries() -> list:
         ("Backup retention", lambda c: _format_retention(c.backup_retention_days),
          lambda c: setattr(c, "backup_retention_days", max(0, IntPrompt.ask("Keep backups how many days? (0 = forever)", default=c.backup_retention_days)))),
         ("Lucky reserve", lambda c: f"{c.lucky_reserve_seconds / 60:g} min of CPS", _reserve_edit),
-        _bool_entry("Auto-pop wrinklers in Frenzy", "auto_pop_wrinklers_in_frenzy",
-                    "Auto-pop wrinklers during Frenzy? (otherwise hold; 'w' pops manually)"),
+        ("Wrinkler strategy", lambda c: c.wrinkler_strategy,
+         lambda c: setattr(c, "wrinkler_strategy", Prompt.ask(
+             "Wrinklers (hold = manual 'w'; pop-when-full = reclaim at max slots; "
+             "always = pop continuously). Pops before ascend + farms Halloween either way",
+             choices=["hold", "pop-when-full", "always"], default=c.wrinkler_strategy))),
         _bool_entry("Payback purchase mode", "payback_mode", "Use experimental payback-time purchase mode?"),
         ("Payback cap", lambda c: f"{c.payback_cap_minutes:g} min" if c.payback_cap_minutes else "[dim]no cap[/dim]",
          lambda c: setattr(c, "payback_cap_minutes", max(0.0, FloatPrompt.ask("Skip buys slower to pay off than how many minutes? (0 = no cap)", default=c.payback_cap_minutes)))),

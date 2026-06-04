@@ -747,15 +747,33 @@ for (var i = 0; i < bank.goodsById.length; i++) {
 # Close any leftover dragon/Santa special popup or prompt the game may have
 # opened (the cause of the "dialog stays open" hang). Only ever CLOSES — it
 # checks the popup is actually on-screen before toggling, so it never opens one.
+# Close only a blocking Game.Prompt overlay (e.g. a confirm from UpgradeDragon).
+# We deliberately do NOT touch the dragon/Santa "special" popup here: calling
+# Game.ToggleSpecialMenu re-rendered it OPEN with stale data on the live build
+# (the "stuck younger-Krumblor menu"), and the bot never needs that popup — it
+# sets auras by writing Game.dragonAura directly and trains via Game.UpgradeDragon.
 _CLOSE_SPECIAL = """
+try { if (typeof Game.ClosePrompt === 'function') Game.ClosePrompt(); } catch (e) {}
+"""
+
+# One-shot cleanup for a special popup left stuck open by an earlier run (or the
+# old ToggleSpecialMenu bug). Closes it the way the game does — by removing the
+# 'onScreen' class — and CLEARS any inline display override (incl. a stale
+# display:none a previous version may have set) so the player can open it normally
+# again. Never opens or rebuilds it. Run once at startup. Returns wasOpen.
+CLEAR_STUCK_SPECIAL_MENU = """
+var wasOpen = false;
 try {
     if (typeof Game.ClosePrompt === 'function') Game.ClosePrompt();
     var pop = (typeof l === 'function') ? l('specialPopup') : null;
-    if (pop && pop.className && pop.className.indexOf('onScreen') >= 0
-        && typeof Game.ToggleSpecialMenu === 'function') {
-        Game.ToggleSpecialMenu(0);
+    if (pop) {
+        var cn = pop.className || '';
+        wasOpen = cn.indexOf('onScreen') >= 0 || pop.style.display === 'block';
+        pop.className = cn.replace(/\\bonScreen\\b/g, '').trim();
+        pop.style.display = '';   // clear inline override; let the game's CSS drive it
     }
 } catch (e) {}
+return wasOpen;
 """
 
 # Level up Krumblor as far as is affordable AND safe in one go (verified against
@@ -991,6 +1009,14 @@ try {
     d.dragonAura = Game.dragonAura;
     d.dragonAura2 = Game.dragonAura2;
     d.setDragonAuraType = typeof Game.SetDragonAura;
+    d.upgradeDragonType = typeof Game.UpgradeDragon;
+    // Is the special (dragon/Santa) popup currently open, and what is it showing?
+    var pop = (typeof l === 'function') ? l('specialPopup') : null;
+    d.specialPopup = pop
+        ? {className: pop.className || '', display: (pop.style ? pop.style.display : ''),
+           onScreen: (pop.className || '').indexOf('onScreen') >= 0}
+        : 'absent';
+    d.specialTab = (typeof Game.specialTab !== 'undefined') ? Game.specialTab : 'undef';
     var auras = [];
     for (var k in Game.dragonAuras) {
         var a = Game.dragonAuras[k];
@@ -1098,6 +1124,25 @@ if (Game.wrinklers) {
         }
     }
 }
+"""
+
+# Attached-wrinkler snapshot for the pop policy: how many are attached (phase 2),
+# the max slots (Game.getWrinklersMax accounts for Elder Spice / Dragon Guts), the
+# total cookies they've digested, how many are shiny (type 1), and the live season
+# (so we can farm spooky cookies during Halloween without depending on the season
+# tick). Pure read.
+WRINKLER_STATE = """
+var out = {count: 0, max: 10, sucked: 0, shiny: 0, season: (typeof Game !== 'undefined' ? (Game.season || '') : '')};
+if (typeof Game === 'undefined' || !Game.wrinklers) return out;
+if (typeof Game.getWrinklersMax === 'function') out.max = Game.getWrinklersMax();
+for (var i = 0; i < Game.wrinklers.length; i++) {
+    var w = Game.wrinklers[i];
+    if (!w || w.phase != 2) continue;
+    out.count++;
+    out.sucked += w.sucked || 0;
+    if (w.type == 1) out.shiny++;
+}
+return out;
 """
 
 # Pop wrinklers only while a CpS-multiplying buff (Frenzy, Elder Frenzy, etc.)
