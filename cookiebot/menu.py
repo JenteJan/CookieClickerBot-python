@@ -148,76 +148,104 @@ def _confirm_new_game(cfg: Config) -> bool:
     return True
 
 
+# Curated dragon-aura presets, so you pick a number instead of typing exact names.
+# (slot1,slot2 — order is cosmetic; both auras are active at once.)
+_AURA_PRESETS = [
+    ("Radiant Appetite,Dragonflight",
+     "Radiant Appetite + Dragonflight — click combo (best with the autoclicker)"),
+    ("Radiant Appetite,Ancestral Metamorphosis",
+     "Radiant Appetite + Ancestral Metamorphosis — bigger golden-cookie payouts"),
+    ("Radiant Appetite,Dragon's Fortune",
+     "Radiant Appetite + Dragon's Fortune — only if goldens are left on screen"),
+    ("Radiant Appetite,Breath of Milk",
+     "Radiant Appetite + Breath of Milk — idle / passive CpS"),
+]
+
+
+def _pick_dragon_auras(cfg: Config) -> None:
+    _console.print()
+    for i, (_combo, desc) in enumerate(_AURA_PRESETS, 1):
+        _console.print(f"    [bold]{i}[/bold]) {desc}")
+    custom = len(_AURA_PRESETS) + 1
+    _console.print(f"    [bold]{custom}[/bold]) Custom — type two aura names")
+    cur = cfg.dragon_aura_combo
+    default = next((str(i) for i, (c, _) in enumerate(_AURA_PRESETS, 1) if c == cur), str(custom))
+    ans = Prompt.ask("Pick auras", choices=[str(i) for i in range(1, custom + 1)],
+                     default=default, show_choices=False)
+    if int(ans) == custom:
+        cfg.dragon_aura_combo = Prompt.ask("Two aura names, comma-separated", default=cur).strip()
+    else:
+        cfg.dragon_aura_combo = _AURA_PRESETS[int(ans) - 1][0]
+
+
+def _bool_entry(label: str, attr: str, prompt: str):
+    return (
+        label,
+        lambda c: "[green]on[/green]" if getattr(c, attr) else "[dim]off[/dim]",
+        lambda c: setattr(c, attr, Confirm.ask(prompt, default=getattr(c, attr))),
+    )
+
+
+def _reserve_edit(c: Config) -> None:
+    c.lucky_reserve_seconds = max(0.0, FloatPrompt.ask(
+        "Lucky reserve in minutes of CPS (100 = max Lucky, 720 = max Chain)",
+        default=c.lucky_reserve_seconds / 60)) * 60
+
+
+def _settings_entries() -> list:
+    """Each entry: (label, show(cfg)->str, edit(cfg)). Edited individually so you
+    change one thing without walking the whole wizard."""
+    return [
+        ("Browser", lambda c: c.browser,
+         lambda c: setattr(c, "browser", Prompt.ask("Browser", choices=["firefox", "chrome"], default=c.browser))),
+        _bool_entry("Headless", "headless", "Run headless?"),
+        ("Backup interval", lambda c: _format_interval(c.backup_interval_hours),
+         lambda c: setattr(c, "backup_interval_hours", max(0.0, FloatPrompt.ask("Backup every how many hours? (0 = off)", default=c.backup_interval_hours)))),
+        ("Backup retention", lambda c: _format_retention(c.backup_retention_days),
+         lambda c: setattr(c, "backup_retention_days", max(0, IntPrompt.ask("Keep backups how many days? (0 = forever)", default=c.backup_retention_days)))),
+        ("Lucky reserve", lambda c: f"{c.lucky_reserve_seconds / 60:g} min of CPS", _reserve_edit),
+        _bool_entry("Auto-pop wrinklers in Frenzy", "auto_pop_wrinklers_in_frenzy",
+                    "Auto-pop wrinklers during Frenzy? (otherwise hold; 'w' pops manually)"),
+        _bool_entry("Payback purchase mode", "payback_mode", "Use experimental payback-time purchase mode?"),
+        ("Payback cap", lambda c: f"{c.payback_cap_minutes:g} min" if c.payback_cap_minutes else "[dim]no cap[/dim]",
+         lambda c: setattr(c, "payback_cap_minutes", max(0.0, FloatPrompt.ask("Skip buys slower to pay off than how many minutes? (0 = no cap)", default=c.payback_cap_minutes)))),
+        _bool_entry("Auto-ascend", "auto_ascend", "Auto-ascend (soft reset) when worthwhile?"),
+        ("Ascend gain %", lambda c: f"{c.auto_ascend_gain_pct:g}%",
+         lambda c: setattr(c, "auto_ascend_gain_pct", max(0.0, FloatPrompt.ask("Ascend when prestige would grow by at least what %?", default=c.auto_ascend_gain_pct)))),
+        _bool_entry("Auto-train Krumblor", "auto_train_dragon", "Auto-train Krumblor? (some levels sacrifice buildings)"),
+        ("Dragon: keep buildings", lambda c: str(c.dragon_keep_buildings),
+         lambda c: setattr(c, "dragon_keep_buildings", max(0, IntPrompt.ask("Keep at least how many of a building after a sacrifice?", default=c.dragon_keep_buildings)))),
+        ("Dragon: sacrifice bank fraction", lambda c: f"{c.dragon_sacrifice_bank_fraction:g}",
+         lambda c: setattr(c, "dragon_sacrifice_bank_fraction", max(0.0, FloatPrompt.ask("Take a sacrifice level only when rebuy costs <= what fraction of the bank? (0 = always)", default=c.dragon_sacrifice_bank_fraction)))),
+        _bool_entry("Auto-equip dragon auras", "auto_dragon_auras", "Auto-equip dragon auras once Krumblor is trained?"),
+        ("Dragon auras", lambda c: c.dragon_aura_combo, _pick_dragon_auras),
+        _bool_entry("Auto-play seasons/holidays", "auto_seasons",
+                    "Auto-play seasons/holidays? (enter a season, collect upgrades, level Santa, cycle — needs 'Season switcher')"),
+        _bool_entry("Auto-play garden", "auto_garden", "Auto-play the garden? (breed seeds, then steady-state layout)"),
+        ("Garden strategy", lambda c: c.garden_strategy,
+         lambda c: setattr(c, "garden_strategy", Prompt.ask("Garden strategy (cps/golden/juicy)", choices=["cps", "golden", "juicy"], default=c.garden_strategy))),
+        _bool_entry("Garden: breed soil (Wood chips)", "garden_breed_soil", "Use Wood chips soil while breeding? (faster mutations)"),
+    ]
+
+
 def _edit_settings(cfg: Config) -> None:
-    cfg.browser = Prompt.ask(
-        "Browser", choices=["firefox", "chrome"], default=cfg.browser
-    )
-    cfg.headless = Confirm.ask("Run headless?", default=cfg.headless)
-    interval = FloatPrompt.ask(
-        "Backup every how many hours? (0 = disabled)",
-        default=cfg.backup_interval_hours,
-    )
-    cfg.backup_interval_hours = max(0.0, interval)
-    retention = IntPrompt.ask(
-        "Keep backups for how many days? (0 = keep forever)",
-        default=cfg.backup_retention_days,
-    )
-    cfg.backup_retention_days = max(0, retention)
-    reserve_min = FloatPrompt.ask(
-        "Lucky cookie reserve in minutes of CPS (100 = max Lucky, 720 = max Cookie Chain)",
-        default=cfg.lucky_reserve_seconds / 60,
-    )
-    cfg.lucky_reserve_seconds = max(0.0, reserve_min) * 60
-    cfg.auto_pop_wrinklers_in_frenzy = Confirm.ask(
-        "Auto-pop wrinklers during Frenzy? (otherwise hold; 'w' pops manually)",
-        default=cfg.auto_pop_wrinklers_in_frenzy,
-    )
-    cfg.payback_mode = Confirm.ask(
-        "Use experimental payback-time purchase mode?",
-        default=cfg.payback_mode,
-    )
-    if cfg.payback_mode:
-        cap = FloatPrompt.ask(
-            "Skip purchases slower to pay off than how many minutes? (0 = no cap)",
-            default=cfg.payback_cap_minutes,
-        )
-        cfg.payback_cap_minutes = max(0.0, cap)
-    cfg.auto_ascend = Confirm.ask(
-        "Auto-ascend (soft reset) when worthwhile?",
-        default=cfg.auto_ascend,
-    )
-    if cfg.auto_ascend:
-        pct = FloatPrompt.ask(
-            "Ascend when prestige would grow by at least what %?",
-            default=cfg.auto_ascend_gain_pct,
-        )
-        cfg.auto_ascend_gain_pct = max(0.0, pct)
-    cfg.auto_train_dragon = Confirm.ask(
-        "Auto-train Krumblor? (some levels sacrifice 100 buildings)",
-        default=cfg.auto_train_dragon,
-    )
-    if cfg.auto_train_dragon:
-        keep = IntPrompt.ask(
-            "Keep at least how many of a building after a sacrifice?",
-            default=cfg.dragon_keep_buildings,
-        )
-        cfg.dragon_keep_buildings = max(0, keep)
-    cfg.auto_garden = Confirm.ask(
-        "Auto-play the garden? (breed seeds, then run a steady-state layout)",
-        default=cfg.auto_garden,
-    )
-    if cfg.auto_garden:
-        cfg.garden_strategy = Prompt.ask(
-            "Garden strategy (cps = passive CpS, golden = golden-cookie freq, "
-            "juicy = Juicy Queenbeet farming)",
-            choices=["cps", "golden", "juicy"],
-            default=cfg.garden_strategy,
-        )
-        cfg.garden_breed_soil = Confirm.ask(
-            "Use Wood chips soil while breeding? (faster mutations)",
-            default=cfg.garden_breed_soil,
-        )
-    save_profile_settings(cfg)
+    entries = _settings_entries()
+    while True:
+        _console.print()
+        _console.print(Panel.fit("Settings — pick a number to change, d) done", style="bold yellow"))
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("#", style="dim", justify="right")
+        table.add_column("Setting")
+        table.add_column("Value", style="cyan")
+        for i, (label, show, _edit) in enumerate(entries, 1):
+            table.add_row(str(i), label, show(cfg))
+        _console.print(table)
+        ans = Prompt.ask("Choose", choices=[str(i) for i in range(1, len(entries) + 1)] + ["d"],
+                         default="d", show_choices=False)
+        if ans == "d":
+            break
+        entries[int(ans) - 1][2](cfg)
+        save_profile_settings(cfg)  # persist after each change so nothing is lost
     _console.print(f"  [dim]settings saved for profile '{cfg.save_profile}'[/dim]")
 
 

@@ -114,10 +114,18 @@ PROFILE_FIELDS = (
     "auto_pop_wrinklers_in_frenzy",
     "payback_mode",
     "payback_cap_minutes",
+    "bulk_buy",
+    "bulk_max_buys",
+    "bulk_cheap_fraction",
     "auto_ascend",
     "auto_ascend_gain_pct",
     "auto_train_dragon",
     "dragon_keep_buildings",
+    "dragon_sacrifice_bank_fraction",
+    "auto_dragon_auras",
+    "dragon_aura_combo",
+    "auto_seasons",
+    "season_period_s",
     "disable_rendering",
     "purchase_period_s",
     "auto_garden",
@@ -161,7 +169,7 @@ class Config:
     save_period_s: float = 30.0
     marginals_period_s: float = 5.0  # payback-mode upgrade re-evaluation cadence
     ascend_period_s: float = 60.0
-    dragon_period_s: float = 30.0
+    dragon_period_s: float = 10.0
     # Building-count achievements. Only rush one that's within this many
     # buildings of the current count, and only if its milk/CPS gain pays the
     # purchase back within the cap. (Achievements persist across ascension, so
@@ -216,6 +224,28 @@ class Config:
     # payback_cap_minutes (0 = no cap). Off by default for easy A/B comparison.
     payback_mode: bool = False
     payback_cap_minutes: float = 0.0
+    # Bulk-buy drain. The purchase tick normally buys a single item per 50 ms.
+    # Right after an ascension the prestige multiplier floods cookies in while
+    # hundreds of buildings/upgrades are all trivially cheap no-brainers, so the
+    # one-per-tick pace wastes minutes trickling them out over Selenium. When on,
+    # a tick keeps buying the best-scored affordable item — reusing the same
+    # scoring + golden-reserve checks, simulated locally with no extra round
+    # trips — until nothing worthwhile is affordable, then fires the whole batch
+    # in ONE browser call. Steady-state ticks still buy 0-1 items (you can rarely
+    # afford two worthwhile buys inside 50 ms), so this only "kicks in" when you
+    # have a surplus — exactly the post-ascension catch-up. bulk_max_buys caps a
+    # single tick's batch so one tick can't run away.
+    bulk_buy: bool = True
+    bulk_max_buys: int = 250
+    # Accuracy guard for the drain. The first buy each tick is always scored from
+    # the live snapshot (exact). Every *later* buy in the same tick is only batched
+    # when it costs at most this fraction of the remaining bank — i.e. pocket
+    # change the simulated-model drift can't misjudge. The moment the best item is
+    # pricier than this (a real "save up for it" decision), the drain stops and
+    # lets the next tick re-snapshot and score it exactly. 0.02 = only fast-path
+    # buys you could afford 50× over. Lower = stricter/more accurate, slower
+    # catch-up; raise toward 1.0 to batch more aggressively. 0 = one buy per tick.
+    bulk_cheap_fraction: float = 0.02
     # Auto-ascension. Off by default — ascending is a soft reset. When on, the
     # bot reincarnates once ascending now would raise prestige level by at least
     # auto_ascend_gain_pct (relative to current). Heavenly chips persist unspent.
@@ -227,6 +257,38 @@ class Config:
     # Requires the "How to bake your dragon" heavenly upgrade.
     auto_train_dragon: bool = False
     dragon_keep_buildings: int = 100
+    # Krumblor is best leveled ASAP (its cost only rises), so the dragon tick now
+    # trains as many levels as are affordable+safe in one go. A building-sacrifice
+    # level is only taken when rebuying the whole sacrifice costs at most this
+    # fraction of the current bank — so it fires freely when you're cookie-rich
+    # (your case) and holds when buying the buildings back would actually hurt.
+    # 0 disables the cost gate (rely on dragon_keep_buildings alone).
+    dragon_sacrifice_bank_fraction: float = 0.25
+    # Auto-equip the golden-cookie-combo dragon auras once Krumblor is fully
+    # trained (the only state with a second aura slot and every aura unlocked).
+    # dragon_aura_combo is an ordered, comma-separated list: the first name goes in
+    # slot 1, the second in slot 2. Default is the click-combo meta — Radiant
+    # Appetite (×2 production) + Dragon's Fortune (+CpS per golden cookie on
+    # screen). Setting auras is free and reversible, so this is on by default; it
+    # no-ops until the dragon is maxed and only re-sets when the equipped auras
+    # differ. Polled on dragon_period_s (the dragon tick runs if either this or
+    # auto_train_dragon is on).
+    auto_dragon_auras: bool = True
+    # Slot1,slot2 aura names. Default suits an insta-pop + autoclick bot: Radiant
+    # Appetite (×2 everything, always on) + Dragonflight (clicking-oriented, good
+    # when the cookie is being autoclicked). Dragon's Fortune is intentionally NOT
+    # the default — it only pays off with golden cookies left ON SCREEN, which
+    # insta-popping never does. Swap to "Radiant Appetite,Ancestral Metamorphosis"
+    # to favour golden-cookie payouts instead.
+    dragon_aura_combo: str = "Radiant Appetite,Dragonflight"
+    # Auto-play seasons/holidays. Off by default — it spends cookies to switch and
+    # needs the 'Season switcher' heavenly upgrade. When on, the bot enters a
+    # season, grabs that season's upgrades cheapest-first (fastest CpS per cookie),
+    # levels Santa to max during Christmas (→ Santa's dominion), then cycles to the
+    # next incomplete season. Seasonal spending keeps the same golden-cookie
+    # reserve as normal buys.
+    auto_seasons: bool = False
+    season_period_s: float = 15.0
     # Garden minigame player. Off by default — when off, the bot keeps its old
     # behavior (clover-spam every empty plot). When on, it runs a two-phase
     # player: first BREED the seed log up to the chosen strategy's plants

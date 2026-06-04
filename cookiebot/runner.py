@@ -114,10 +114,17 @@ class CookieBot:
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
         self._dragon_aura_logged = False
+        self._aura_pending_logged = False
+        self._aura_warn_logged = False
+        self._season_logged = False
         self._sell_mode_logged = False
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
         self._upgrade_marginals: dict[int, float] = {}
+        # Cache of building-name → true marginal CPS of one more of that building
+        # (captures the cross-building synergy boost a new building gives others,
+        # which the static storedCps/price heuristic misses). Same slow cadence.
+        self._building_marginals: dict[str, float] = {}
         # Cache of tier-unlock bundles (buy N buildings + the upgrade they
         # unlock), refreshed on the same slow cadence.
         self._tier_bundles: list[dict] = []
@@ -180,6 +187,11 @@ class CookieBot:
             log.info("dynamic golden-cookie reserve on")
         log.info("setup complete; %d golden cookie upgrades owned, %d achievements",
                  self.golden_count, self._status.achievements_owned)
+        try:
+            diag = self.driver.execute_script(scripts.DIAGNOSE_DRAGON_SEASON)
+            log.info("DIAG dragon/season: %s", diag)
+        except Exception:
+            log.exception("dragon/season diagnostic failed")
 
         # Batch barrier: signal we're loaded, wait for the shared start moment,
         # then begin playing — so all instances start at the same instant.
@@ -277,16 +289,18 @@ class CookieBot:
                 self._buy_building(best)
             return
 
-        # Building score is value-per-cost (= 1/payback). In payback mode, credit
-        # the achievement-milk bonus to buys that cross a count threshold.
+        # Building score is value-per-cost (= 1/payback). In payback mode: use the
+        # larger of the static storedCps/price heuristic and the TRUE marginal
+        # (which credits the cross-building synergy a new building gives others),
+        # then add the achievement-milk bonus to buys that cross a count threshold.
         def building_score(b: Building) -> float:
             score = b.heuristic
-            if (
-                self.cfg.payback_mode
-                and b.price > 0
-                and building_buy_crosses_achievement(b.amount)
-            ):
-                score += achievement_milk_bonus_cps(cookies_ps) / b.price
+            if self.cfg.payback_mode and b.price > 0:
+                marginal = self._building_marginals.get(b.name)
+                if marginal is not None:
+                    score = max(score, marginal / b.price)
+                if building_buy_crosses_achievement(b.amount):
+                    score += achievement_milk_bonus_cps(cookies_ps) / b.price
             return score
 
         clicks_per_sec = 1000.0 / max(AUTOCLICK_COOKIE_MS, 1)
@@ -341,16 +355,151 @@ class CookieBot:
             min_score = 1.0 / (self.cfg.payback_cap_minutes * 60)
 
         building_best_score = building_score(best_building)
-        # Pick the single best action among building / upgrade / bundle.
+        # Pick the best action among building / upgrade / bundle. A winning bundle
+        # is bought on its own (it already buys N buildings + the tier upgrade in
+        # one shot). Otherwise drain every worthwhile building/upgrade affordable
+        # right now in a single batched call — one item in steady state, the whole
+        # post-ascension shopping list during catch-up.
         if best_bundle is not None and best_bundle_score >= max(
             building_best_score, best_upgrade[1], min_score
         ):
             self._maybe_buy_bundle(best_bundle, cookies, cookies_ps)
-        elif best_upgrade[1] > building_best_score and best_upgrade[0] is not None:
-            if best_upgrade[1] >= min_score:
-                self._maybe_buy_upgrade(best_upgrade[0], cookies, cookies_ps, store_prices[best_upgrade[0]])
-        elif building_best_score >= min_score:
-            self._maybe_buy_building(best_building, cookies, cookies_ps)
+        else:
+            self._buy_drain(
+                cookies, cookies_ps, buildings, scored_upgrades,
+                store_prices, building_score, min_score,
+            )
+
+    def _buy_drain(
+        self,
+        cookies: float,
+        cookies_ps: float,
+        buildings: list[Building],
+        scored_upgrades: list[tuple[int, float]],
+        store_prices: dict[int, float],
+        building_score,
+        min_score: float,
+    ) -> None:
+        """Buy the best-scored affordable building/upgrade repeatedly, batching the
+        whole run into one browser call.
+
+        The pick + affordability logic mirrors the single-buy path exactly
+        (``building_score`` / upgrade scores / ``_affordable_with_reserve``), but
+        runs against a *local* model of the bank and prices so a tick with a large
+        surplus drains the full no-brainer list without a Selenium round trip per
+        item. Each building buy bumps that building's price ×1.15 (the game's
+        growth factor) and decays its value-per-cost the same way; each upgrade is
+        one-shot. The golden-cookie reserve is honoured per simulated buy, so the
+        drain stops at the reserve floor just like the normal tick.
+
+        Accuracy guard: the FIRST buy each tick runs against the live snapshot, so
+        it is exactly as accurate as the old single-buy path — expensive "should I
+        save up for this?" decisions are never made off the simulated model. Every
+        *subsequent* buy in the same tick is only allowed when it is cheap relative
+        to the remaining bank (``bulk_cheap_fraction``), where the local model's
+        drift can't change the decision. The moment the best remaining item is
+        pricey enough to be a real save-up tradeoff, the drain stops and hands that
+        single decision back to the next tick, which re-snapshots and re-scores it
+        exactly. So bulk only ever fast-paths pocket-change buys.
+
+        With ``bulk_buy`` off the cap is 1, reproducing the old one-per-tick pace.
+        """
+        cap = max(1, self.cfg.bulk_max_buys) if self.cfg.bulk_buy else 1
+        cheap_fraction = max(0.0, self.cfg.bulk_cheap_fraction)
+
+        # Mutable local models. Buildings carry a live value/cost and price; the
+        # achievement-milk crossing bonus (payback mode) is folded into the
+        # starting score and then decayed — close enough for a catch-up burst.
+        bmodel = {
+            b.name: {"name": b.name, "score": building_score(b), "price": b.price}
+            for b in buildings
+        }
+        umodel = {
+            uid: {"score": sc, "price": store_prices[uid]} for uid, sc in scored_upgrades
+        }
+
+        bank = cookies
+        batch: list[list] = []  # compact actions for scripts.BULK_BUY
+        bought: list[tuple[str, str, float, float]] = []  # (kind, name, price, score) for logging
+
+        for i in range(cap):
+            best_b = max(bmodel.values(), key=lambda d: d["score"], default=None)
+            best_u_uid = max(umodel, key=lambda k: umodel[k]["score"], default=None)
+            b_score = best_b["score"] if best_b is not None else float("-inf")
+            u_score = umodel[best_u_uid]["score"] if best_u_uid is not None else float("-inf")
+
+            # Past the first (exact) buy, only fast-path items that are pocket
+            # change vs. the remaining bank; anything pricier is a genuine save-up
+            # decision and is deferred to the next tick's exact re-evaluation.
+            def too_pricey_to_batch(price: float) -> bool:
+                return i > 0 and price > bank * cheap_fraction
+
+            if u_score >= b_score and best_u_uid is not None:
+                price = umodel[best_u_uid]["price"]
+                if (
+                    u_score < min_score
+                    or too_pricey_to_batch(price)
+                    or not self._affordable_with_reserve(bank, cookies_ps, price)
+                ):
+                    break
+                up = self.upgrades_by_id[best_u_uid]
+                batch.append(["u", best_u_uid])
+                bought.append(("upgrade", up.name, price, u_score))
+                bank -= price
+                del umodel[best_u_uid]
+                if up.name in GOLDEN_COOKIE_UPGRADE_NAMES:
+                    # Owning another holding upgrade changes the reserve rule;
+                    # stop so the next tick re-evaluates with the new count.
+                    break
+            elif best_b is not None:
+                price = best_b["price"]
+                if (
+                    b_score < min_score
+                    or too_pricey_to_batch(price)
+                    or not self._affordable_with_reserve(bank, cookies_ps, price)
+                ):
+                    break
+                batch.append(["b", best_b["name"], 1])
+                bought.append(("building", best_b["name"], price, best_b["score"]))
+                bank -= price
+                best_b["price"] *= 1.15
+                best_b["score"] /= 1.15
+            else:
+                break
+
+        if not batch:
+            return
+
+        # Coalesce consecutive same-building buys into one buy(qty) call.
+        coalesced: list[list] = []
+        for action in batch:
+            if (
+                action[0] == "b"
+                and coalesced
+                and coalesced[-1][0] == "b"
+                and coalesced[-1][1] == action[1]
+            ):
+                coalesced[-1][2] += action[2]
+            else:
+                coalesced.append(list(action))
+
+        n = self.driver.execute_script(scripts.BULK_BUY, coalesced)
+        spent = cookies - bank
+        if len(bought) == 1:
+            kind, name, _price, _score = bought[0]
+            log.info("buy %s %s @ %.2e", kind, name, spent)
+            self._status.update(last_action=f"buy {name}")
+        else:
+            log.info("bulk buy %d items, spent %.2e (cps=%.2f)", len(bought), spent, cookies_ps)
+            self._status.update(last_action=f"bulk ×{n or len(bought)}")
+
+        for kind, name, price, score in bought:
+            if kind == "upgrade":
+                if name in GOLDEN_COOKIE_UPGRADE_NAMES:
+                    self.golden_count += 1
+                    self._status.update(golden_count=self.golden_count)
+            if self._trial is not None:
+                self._trial.buy(kind, name, price, score)
 
     def _update_next_buys(
         self,
@@ -405,22 +554,6 @@ class CookieBot:
         # Trivially cheap purchases (under 1 s of CPS) still go through if we have
         # at least 50 s of CPS banked — barely dents the reserve target.
         return cookies_ps > price and cookies_ps * 50 < cookies
-
-    def _maybe_buy_building(self, b: Building, cookies: float, cookies_ps: float) -> None:
-        if self._affordable_with_reserve(cookies, cookies_ps, b.price):
-            self._buy_building(b)
-
-    def _maybe_buy_upgrade(self, uid: int, cookies: float, cookies_ps: float, price: float) -> None:
-        up = self.upgrades_by_id[uid]
-        if self._affordable_with_reserve(cookies, cookies_ps, price):
-            log.info("buy upgrade id=%s reserve=%.1fs cps=%.2f", uid, cookies / cookies_ps, cookies_ps)
-            self.driver.execute_script(scripts.BUY_UPGRADE, uid)
-            if up.name in GOLDEN_COOKIE_UPGRADE_NAMES:
-                self.golden_count += 1
-                self._status.update(golden_count=self.golden_count)
-            self._status.update(last_action=f"upgrade #{uid}")
-            if self._trial is not None:
-                self._trial.buy("upgrade", up.name, price, self._upgrade_marginals.get(uid, 0.0))
 
     def _buy_building(self, b: Building) -> None:
         log.info("buy building %s @ %.2f", b.name, b.price)
@@ -569,6 +702,16 @@ class CookieBot:
         deltas = result.get("deltas", {}) if result else {}
         self._upgrade_marginals = {int(k): float(v) for k, v in deltas.items()}
 
+        # True marginal CPS for one more of each building (captures cross-building
+        # synergies the static storedCps/price heuristic misses).
+        try:
+            bresult = self.driver.execute_script(scripts.EVALUATE_BUILDING_MARGINALS)
+            bdeltas = bresult.get("deltas", {}) if bresult else {}
+            self._building_marginals = {str(k): float(v) for k, v in bdeltas.items()}
+        except Exception:
+            log.exception("building marginal evaluation failed")
+            self._building_marginals = {}
+
         # Refresh tier-unlock bundles on the same cadence (both use the costly
         # CalculateGains, both feed the purchase tick from a cache).
         try:
@@ -613,17 +756,79 @@ class CookieBot:
             self._status.update(last_action=f"backup → {path.name}")
 
     def dragon_tick(self) -> None:
-        info = self.driver.execute_script(scripts.DRAGON_TRAIN, self.cfg.dragon_keep_buildings)
-        if info.get("trained"):
-            log.info("dragon leveled to %s (%s)", info.get("level"), info.get("name"))
-            self._status.update(last_action=f"dragon → {info.get('name')}")
-        elif info.get("blocked"):
-            log.info("dragon level held: needs %d %s to sacrifice safely",
-                     info.get("need"), info.get("building"))
-        elif info.get("needs_aura") and not self._dragon_aura_logged:
-            # Aura choice is strategic — leave it to the user and only say so once.
-            log.info("dragon at an aura-training level; choose an aura manually to continue")
-            self._dragon_aura_logged = True
+        if self.cfg.auto_train_dragon:
+            info = self.driver.execute_script(
+                scripts.DRAGON_TRAIN,
+                self.cfg.dragon_keep_buildings,
+                self.cfg.dragon_sacrifice_bank_fraction,
+            ) or {}
+            trained = info.get("trained") or []
+            if trained:
+                log.info("dragon leveled +%d → %s", len(trained), trained[-1])
+                self._status.update(last_action=f"dragon → {trained[-1]}")
+            blocked = info.get("blocked")
+            if blocked and not trained:
+                if blocked.get("reason") == "rebuy-too-pricey":
+                    log.debug("dragon sacrifice held: rebuying it costs too much vs the bank")
+                elif blocked.get("building"):
+                    log.info("dragon level held: needs %s %s to sacrifice safely",
+                             blocked.get("need"), blocked.get("building"))
+            if info.get("needs_aura") and not self.cfg.auto_dragon_auras \
+                    and not self._dragon_aura_logged:
+                # Aura choice is strategic — leave it to the user and only say so once.
+                log.info("dragon at an aura-training level; choose an aura manually to continue")
+                self._dragon_aura_logged = True
+        if self.cfg.auto_dragon_auras:
+            prefs = [s.strip() for s in self.cfg.dragon_aura_combo.split(",") if s.strip()]
+            if prefs:
+                res = self.driver.execute_script(scripts.SET_DRAGON_AURAS, prefs) or {}
+                if res.get("changed"):
+                    names = ", ".join(res["changed"])
+                    log.info("dragon auras equipped: %s", names)
+                    self._status.update(last_action=f"dragon auras: {names}")
+                    self._aura_pending_logged = False  # re-arm for any still-locked slot
+                if res.get("noSetFn") and not self._aura_warn_logged:
+                    log.warning("this game build has no Game.SetDragonAura — can't auto-set auras")
+                    self._aura_warn_logged = True
+                if res.get("failed") and not self._aura_warn_logged:
+                    log.warning("dragon aura(s) %s didn't take effect when set (API mismatch?)",
+                                ", ".join(res["failed"]))
+                    self._aura_warn_logged = True
+                if res.get("missing") and not self._aura_warn_logged:
+                    log.warning("dragon aura name(s) not found in this game: %s — check the names "
+                                "in dragon_aura_combo", ", ".join(res["missing"]))
+                    self._aura_warn_logged = True
+                if res.get("pending") and not res.get("changed") and not self._aura_pending_logged:
+                    log.info("dragon auras %s not unlocked yet (dragon level %s) — will equip as "
+                             "Krumblor trains up", ", ".join(res["pending"]), res.get("dragonLevel"))
+                    self._aura_pending_logged = True
+
+    # Seasons cycled in priority order; 'fools' (Business Day) is skipped — it has
+    # no CpS upgrades to collect.
+    _SEASON_CYCLE = ["christmas", "halloween", "valentines", "easter"]
+
+    def season_tick(self) -> None:
+        reserve_seconds = self.cfg.lucky_reserve_seconds if self.golden_count == 3 else 0.0
+        res = self.driver.execute_script(
+            scripts.SEASON_TICK, reserve_seconds, self._SEASON_CYCLE
+        ) or {}
+        if res.get("action") == "no-switcher":
+            if not self._season_logged:
+                log.info("auto-seasons on, but the 'Season switcher' heavenly upgrade "
+                         "isn't owned yet — seasons can't be forced, skipping")
+                self._season_logged = True
+            return
+        if res.get("santa"):
+            log.info("Santa leveled +%d (now level %s)", res["santa"], res.get("santaLevel"))
+        if res.get("bought"):
+            self._status.update(
+                last_action=f"season {res.get('season')}: +{res['bought']} upgrades"
+            )
+        action = res.get("action", "")
+        if action.startswith("switch:"):
+            season = action.split(":", 1)[1]
+            log.info("entered season: %s", season)
+            self._status.update(last_action=f"season → {season}")
 
     def ascend_tick(self) -> None:
         info = self.driver.execute_script(scripts.ASCEND_INFO)
@@ -791,8 +996,10 @@ class CookieBot:
                               "backup", delay_first=True)
         if self.cfg.auto_ascend:
             self._sched.every(self.cfg.ascend_period_s, self.ascend_tick, "ascend", delay_first=True)
-        if self.cfg.auto_train_dragon:
+        if self.cfg.auto_train_dragon or self.cfg.auto_dragon_auras:
             self._sched.every(self.cfg.dragon_period_s, self.dragon_tick, "dragon", delay_first=True)
+        if self.cfg.auto_seasons:
+            self._sched.every(self.cfg.season_period_s, self.season_tick, "seasons")
 
     def tick_once(self) -> float:
         """Run one drain+schedule pass; returns seconds the caller may sleep.

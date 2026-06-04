@@ -169,6 +169,33 @@ Game.CalculateGains();
 return {base: base, deltas: out};
 """
 
+# True marginal CPS of one MORE of each building, measured with CalculateGains
+# (bump amount by 1, recompute, read the cookiesPs delta, revert). Unlike the
+# static storedCps/price heuristic this captures the boost a new building gives to
+# OTHER buildings — Thousand-Fingers cursor scaling, grandma-per-building
+# synergies, building-pair synergies, Idleverse/Cortex cross-boosts, etc. Wrapped
+# in try/finally so a throw can't leave amounts mutated. Returns {name: deltaCps}.
+EVALUATE_BUILDING_MARGINALS = """
+var base = Game.cookiesPs;
+var out = {};
+for (var key in Game.Objects) {
+    var b = Game.Objects[key];
+    var amt = b.amount, delta = 0;
+    try {
+        b.amount = amt + 1;
+        Game.CalculateGains();
+        delta = Game.cookiesPs - base;
+    } catch (e) {
+        delta = 0;
+    } finally {
+        b.amount = amt;
+    }
+    out[b.name] = delta;
+}
+Game.CalculateGains();  // restore real CPS
+return {base: base, deltas: out};
+"""
+
 # "Tier unlock bundles": a tiered building upgrade (each ~2x that building's
 # output) only becomes purchasable once you own Game.Tiers[tier].unlock of the
 # building. This evaluates, per building, the nearest LOCKED tiered upgrade
@@ -291,6 +318,30 @@ BUY_BUILDING = "Game.Objects[arguments[0]].buy(arguments[1]);"
 # buy(1) is exactly what the game's own "Yes" button calls, so it purchases
 # directly with no modal.
 BUY_UPGRADE = "Game.UpgradesById[arguments[0]].buy(1);"
+
+# Execute a pre-computed batch of buys in one round trip (the bulk-buy drain).
+# The runner already decided WHAT to buy and in WHAT order (reusing its scoring +
+# golden-reserve checks, simulated locally), so this stays dumb: it just walks the
+# list and buys. Each action is a compact array to keep the payload small:
+#   ['b', buildingName, qty]  -> buy qty of a building
+#   ['u', upgradeId]          -> buy an in-store upgrade (skip if already bought)
+# buy() is used (not click()) for the same reason as BUY_UPGRADE: it never opens a
+# blocking grandmapocalypse modal. Returns how many individual buys landed.
+BULK_BUY = """
+var actions = arguments[0];
+var n = 0;
+for (var i = 0; i < actions.length; i++) {
+    var a = actions[i];
+    if (a[0] === 'b') {
+        var o = Game.Objects[a[1]];
+        if (o) { var q = a[2] || 1; o.buy(q); n += q; }
+    } else {
+        var u = Game.UpgradesById[a[1]];
+        if (u && u.unlocked && !u.bought) { u.buy(1); n += 1; }
+    }
+}
+return n;
+"""
 
 # Buy a tier-unlock bundle atomically: the qty buildings first (which unlocks
 # the tiered upgrade via the game's own UnlockTiered hook), then the upgrade.
@@ -564,15 +615,47 @@ if (pledge && pledge.unlocked == 1 && pledge.bought == 0 && Game.cookies >= pled
 # Swaps are scarce (max 3, regenerate over hours), so only move a god that's NOT
 # already in its target slot, and only while a swap is available — never burn
 # swaps re-slotting an already-correct setup. Initial setup costs 3 swaps once.
+#
+# slotGod() ALONE only updates the data model (M.slot + recalc flags); the real
+# game does the swap accounting and rendering in its drop handler. Calling
+# slotGod directly therefore left slots looking empty until hovered and never
+# spent a swap (effectively cheating). So we mirror the drop handler: spend a
+# worship swap via useSwap(1) and re-parent the god's DOM node into the slot.
 SET_PANTHEON = """
 var temple = Game.ObjectsById[6];
 var M = temple && temple.minigame;
 if (!M || temple.level == 0 || !M.slot) return;
-var want = [2, 6, 8];  // [Diamond, Ruby, Jade]
+var want = [2, 6, 8];  // [Diamond, Ruby, Jade] = Godzamok, Muridal, Mokalsium
+function l(id){ return document.getElementById(id); }
+
+function realSlot(godId, slot) {
+    var god = M.godsById[godId];
+    if (!god || god.slot === slot) return false;  // already in place
+    if (M.swaps <= 0) return false;               // play fair: no free swaps
+    M.useSwap(1);                                  // spend the worship swap + set swapT
+    var div = l('templeGod' + god.id), slotEl = l('templeSlot' + slot);
+    if (div && slotEl) {                           // re-parent DOM like the drop handler
+        var prev = M.slot[slot];                   // god already in the target slot
+        if (prev !== -1) {
+            var prevDiv = l('templeGod' + prev);
+            if (prevDiv) {
+                if (god.slot !== -1) l('templeSlot' + god.slot).appendChild(prevDiv);
+                else {
+                    var ph = l('templeGodPlaceholder' + prev);
+                    if (ph && ph.parentNode) ph.parentNode.insertBefore(prevDiv, ph);
+                }
+            }
+        }
+        slotEl.appendChild(div);
+    }
+    M.slotGod(god, slot);                          // commit data model + recalc flags
+    return true;
+}
+
 for (var slot = 0; slot < 3; slot++) {
-    if (M.slot[slot] === want[slot]) continue;  // already correct
-    if (M.swaps <= 0) break;                     // out of swaps; revisit later
-    try { M.slotGod(M.godsById[want[slot]], slot); } catch (e) {}
+    if (M.slot[slot] === want[slot]) continue;     // already correct
+    if (M.swaps <= 0) break;                        // out of swaps; revisit later
+    try { realSlot(want[slot], slot); } catch (e) {}
 }
 """
 
@@ -661,41 +744,270 @@ for (var i = 0; i < bank.goodsById.length; i++) {
 }
 """
 
-# Level up Krumblor one step if it's affordable and safe (verified against live
-# main.js Game.dragonLevels / Game.UpgradeDragon).
+# Close any leftover dragon/Santa special popup or prompt the game may have
+# opened (the cause of the "dialog stays open" hang). Only ever CLOSES — it
+# checks the popup is actually on-screen before toggling, so it never opens one.
+_CLOSE_SPECIAL = """
+try {
+    if (typeof Game.ClosePrompt === 'function') Game.ClosePrompt();
+    var pop = (typeof l === 'function') ? l('specialPopup') : null;
+    if (pop && pop.className && pop.className.indexOf('onScreen') >= 0
+        && typeof Game.ToggleSpecialMenu === 'function') {
+        Game.ToggleSpecialMenu(0);
+    }
+} catch (e) {}
+"""
+
+# Level up Krumblor as far as is affordable AND safe in one go (verified against
+# live main.js Game.dragonLevels / Game.UpgradeDragon). Loops so a big bank rips
+# through the cheap egg/training levels in a single tick instead of one per tick.
 #   - cost() returns a BOOLEAN "requirement met" (e.g. Game.cookies>=N, or
 #     "own >=50 of every building"), not a cookie amount.
-#   - Aura-training levels (the long middle stretch) carry no cost/buy function;
-#     advancing them requires choosing WHICH aura via the UI, a strategic call
-#     we leave to the user. We stop ('needs_aura') there rather than guess.
-#   - The two sacrifice levels permanently sacrifice N of EVERY building; only
-#     taken when every building keeps at least arguments[0] units afterward.
+#   - Aura-training levels carry no cost/buy function (advanced by picking an aura
+#     in the UI); we stop there ('needs_aura') rather than guess.
+#   - Sacrifice levels permanently sacrifice N of EVERY building. Taken only when
+#     (a) every building keeps >= keep units afterward AND (b) rebuying the whole
+#     sacrifice costs <= sacFrac of the current bank (0 = ignore the cost gate).
+# args: keep (int), sacFrac (float). Returns {trained:[names...], maxed, blocked,
+# needs_aura, waiting}.
 DRAGON_TRAIN = """
 var keep = arguments[0];
-if (!Game.Has || !Game.Has('How to bake your dragon')) return {locked: true};
+var sacFrac = arguments[1];
+var out = {trained: [], maxed: false, locked: false, blocked: null, needs_aura: null, waiting: null};
+if (!Game.Has || !Game.Has('How to bake your dragon')) { out.locked = true; return out; }
 var levels = Game.dragonLevels;
-var lvl = Game.dragonLevel;
-if (!levels || lvl >= levels.length - 1) return {maxed: true, level: lvl};
-var me = levels[lvl];
-if (typeof me.cost !== 'function' || typeof me.buy !== 'function') {
-    return {needs_aura: true, level: lvl, name: me.name};
-}
-if (!me.cost()) return {waiting: true, level: lvl, name: me.name};
-// Sacrifice levels read "sacrifice(N)" inside a loop over Game.Objects; ensure
-// every building survives with >= keep units before committing.
-var buyStr = me.buy.toString();
-var sm = buyStr.match(/\\.sacrifice\\((\\d+)\\)/);
-if (sm) {
-    var n = parseInt(sm[1]);
-    for (var i in Game.Objects) {
-        if (Game.Objects[i].amount < keep + n) {
-            return {blocked: true, level: lvl, name: me.name, building: Game.Objects[i].name, need: keep + n};
+for (var guard = 0; guard < 60; guard++) {
+    var lvl = Game.dragonLevel;
+    if (!levels || lvl >= levels.length - 1) { out.maxed = true; break; }
+    var me = levels[lvl];
+    if (typeof me.cost !== 'function' || typeof me.buy !== 'function') {
+        out.needs_aura = {level: lvl, name: me.name}; break;
+    }
+    if (!me.cost()) { out.waiting = {level: lvl, name: me.name}; break; }
+    var sm = me.buy.toString().match(/\\.sacrifice\\((\\d+)\\)/);
+    if (sm) {
+        var n = parseInt(sm[1]);
+        var rebuy = 0, unsafe = null;
+        for (var i in Game.Objects) {
+            var o = Game.Objects[i];
+            if (o.amount < keep + n) { unsafe = {building: o.name, need: keep + n}; break; }
+            rebuy += (typeof o.getSumPrice === 'function') ? o.getSumPrice(n) : 0;
+        }
+        if (unsafe) { unsafe.level = lvl; unsafe.name = me.name; out.blocked = unsafe; break; }
+        if (sacFrac > 0 && rebuy > Game.cookies * sacFrac) {
+            out.blocked = {level: lvl, name: me.name, reason: 'rebuy-too-pricey', rebuy: rebuy}; break;
         }
     }
+    Game.UpgradeDragon();             // re-checks cost() then buy()s; increments dragonLevel
+    if (Game.dragonLevel > lvl) out.trained.push(me.name);
+    else { out.waiting = {level: lvl, name: me.name}; break; }   // didn't advance — avoid a spin
 }
-Game.UpgradeDragon();  // re-checks cost() then buy()s and increments dragonLevel
-if (Game.dragonLevel > lvl) return {trained: true, level: Game.dragonLevel, name: me.name};
-return {waiting: true, level: lvl, name: me.name};
+""" + _CLOSE_SPECIAL + """
+return out;
+"""
+
+# Equip the golden-cookie-combo dragon auras as they become available. An aura is
+# unlocked once the dragon has passed the level that grants it: in main.js auras
+# unlock one-per-level past the egg stages, so the highest unlocked aura id is
+# (Game.dragonLevel - 4). The SECOND aura slot only exists on a fully trained
+# dragon. We never call SetDragonAura on a locked aura, so a fresh/under-leveled
+# dragon equips nothing (no more wrongly equipping a late aura on an egg).
+# args: ordered aura NAMES (prefs[0] -> slot 0, prefs[1] -> slot 1). Names are
+# resolved to ids off Game.dragonAuras at runtime. Returns what (if any) changed.
+SET_DRAGON_AURAS = """
+var prefs = arguments[0] || [];
+var out = {ok: false, set: [], changed: [], pending: [], missing: [], failed: [],
+           slots: 0, dragonLevel: null, unlockedMax: null, noSetFn: false};
+if (typeof Game === 'undefined' || !Game.dragonAuras || !Game.dragonLevels) return out;
+out.dragonLevel = Game.dragonLevel;
+var unlockedMax = Game.dragonLevel - 4;                 // highest unlocked aura id
+out.unlockedMax = unlockedMax;
+var fullyTrained = Game.dragonLevel >= Game.dragonLevels.length - 1;
+out.slots = fullyTrained ? 2 : 1;                       // 2nd slot needs the maxed dragon
+function auraId(name) {
+    for (var k in Game.dragonAuras) {
+        var a = Game.dragonAuras[k];
+        if (a && a.name === name) return (a.id !== undefined) ? a.id : (k | 0);
+    }
+    return -1;
+}
+for (var s = 0; s < prefs.length; s++) {
+    var id = auraId(prefs[s]);
+    if (id < 0) { out.missing.push(prefs[s]); continue; }        // no such aura in this build
+    if (s >= out.slots || id > unlockedMax) { out.pending.push(prefs[s]); continue; }  // slot/aura locked
+    var cur = (s === 0) ? Game.dragonAura : Game.dragonAura2;
+    if (cur === id) { out.set.push(prefs[s]); continue; }        // already equipped
+    // Assign the field directly. Game.SetDragonAura(aura, slot) opens a Confirm
+    // prompt (the "stuck dialog") and doesn't apply synchronously — setting the
+    // field is exactly what that prompt's Confirm button does.
+    if (s === 0) Game.dragonAura = id; else Game.dragonAura2 = id;
+    var now = (s === 0) ? Game.dragonAura : Game.dragonAura2;    // verify it took
+    if (now === id) { out.set.push(prefs[s]); out.changed.push(prefs[s]); }
+    else out.failed.push(prefs[s]);
+}
+if (out.changed.length && typeof Game.CalculateGains === 'function') Game.CalculateGains();
+""" + _CLOSE_SPECIAL + """
+out.ok = true;
+return out;
+"""
+
+# Auto-play seasons: enter a season, collect its upgrades cheapest-first (fastest
+# CpS per cookie), level Santa during Christmas, then cycle to the next incomplete
+# season. Needs the 'Season switcher' heavenly upgrade (without it seasons can't be
+# forced). Every game call is feature-detected so a mismatched build just no-ops.
+# args: reserveSeconds (cookies-of-CpS to keep banked), cycle (ordered season list).
+SEASON_TICK = """
+var reserveSeconds = arguments[0] || 0;
+var cycle = arguments[1] || [];
+var out = {ok: false, action: '', season: '', bought: 0, santa: 0, santaLevel: -1};
+if (typeof Game === 'undefined' || !Game.ready) return out;
+out.season = Game.season || '';
+if (!Game.Has || !Game.Has('Season switcher')) { out.action = 'no-switcher'; return out; }
+
+var reserve = (Game.cookiesPs || 0) * reserveSeconds;
+var BISCUIT = {
+    christmas: 'Festive biscuit', halloween: 'Ghostly biscuit',
+    valentines: 'Lovesick biscuit', easter: 'Bunny biscuit', fools: "Fool's biscuit"
+};
+var cur = Game.season || '';
+
+// The season-switch biscuits are pool 'switch' OR 'toggle' depending on build —
+// never auto-buy or count them; we toggle seasons by name explicitly below.
+function isSwitch(u) { return u.pool === 'switch' || u.pool === 'toggle'; }
+// owned/total seasonal upgrades per season (the switch biscuits don't count).
+function counts() {
+    var c = {};
+    for (var k in Game.Upgrades) {
+        var u = Game.Upgrades[k];
+        if (!u.season || isSwitch(u)) continue;
+        if (!c[u.season]) c[u.season] = {owned: 0, total: 0};
+        c[u.season].total++;
+        if (u.bought) c[u.season].owned++;
+    }
+    return c;
+}
+var santaMax = Game.santaLevels ? Game.santaLevels.length - 1 : 14;
+function complete(season) {
+    var c = counts()[season];
+    if (!c || c.total === 0) return true;
+    if (c.owned < c.total) return false;
+    if (season === 'christmas' && typeof Game.santaLevel === 'number'
+        && Game.santaLevel < santaMax) return false;
+    return true;
+}
+
+// 1) Grab the current season's available upgrades, cheapest first, keeping reserve.
+if (cur && BISCUIT[cur]) {
+    var avail = [];
+    for (var k in Game.Upgrades) {
+        var u = Game.Upgrades[k];
+        if (u.season !== cur || isSwitch(u)) continue;
+        if (u.bought || !u.unlocked) continue;
+        avail.push(u);
+    }
+    avail.sort(function(a, b) { return a.getPrice() - b.getPrice(); });
+    for (var i = 0; i < avail.length; i++) {
+        var p = avail[i].getPrice();
+        if (Game.cookies - p < reserve) continue;
+        avail[i].buy(1);
+        out.bought++;
+    }
+}
+
+// 2) Christmas: level Santa while affordable and not maxed.
+if (cur === 'christmas' && typeof Game.santaLevel === 'number'
+    && typeof Game.UpgradeSanta === 'function') {
+    var guard = 0;
+    while (Game.santaLevel < santaMax && guard < 20) {
+        // Honor the reserve when we know the price; otherwise let UpgradeSanta's
+        // own affordability check decide (santaPrice can be undefined on some builds).
+        var sp = Game.santaPrice;
+        if (typeof sp === 'number' && isFinite(sp) && (Game.cookies - sp) < reserve) break;
+        var before = Game.santaLevel;
+        Game.UpgradeSanta();
+        if (Game.santaLevel === before) break;   // couldn't afford / maxed
+        out.santa++; guard++;
+    }
+    out.santaLevel = Game.santaLevel;
+}
+
+// 3) If the current season is done (or none active), switch to the next
+//    incomplete season we can afford. Biscuits are toggles, so don't gate on
+//    .bought — just that the target isn't the current season.
+if (!cur || complete(cur)) {
+    for (var j = 0; j < cycle.length; j++) {
+        var s = cycle[j];
+        if (s === cur || complete(s)) continue;
+        var biscuit = Game.Upgrades[BISCUIT[s]];
+        if (!biscuit || !biscuit.unlocked) continue;
+        if ((Game.cookies - biscuit.getPrice()) < reserve) continue;
+        biscuit.buy(1);
+        out.action = 'switch:' + s;
+        out.season = Game.season || s;
+        out.ok = true;
+        return out;
+    }
+}
+out.ok = true;
+return out;
+"""
+
+# One-shot ground-truth dump of the live dragon + season API, logged once at
+# startup so we can see exactly what this game build exposes (the bot can't be
+# observed from the dev box). Pure reads; never mutates anything.
+DIAGNOSE_DRAGON_SEASON = """
+var d = {};
+try {
+    d.hasDragon = !!(Game.Has && Game.Has('How to bake your dragon'));
+    d.dragonLevel = Game.dragonLevel;
+    d.dragonLevelsLen = Game.dragonLevels ? Game.dragonLevels.length : null;
+    d.dragonAura = Game.dragonAura;
+    d.dragonAura2 = Game.dragonAura2;
+    d.setDragonAuraType = typeof Game.SetDragonAura;
+    var auras = [];
+    for (var k in Game.dragonAuras) {
+        var a = Game.dragonAuras[k];
+        var dsc = (a && a.desc) ? ('' + a.desc).replace(/<[^>]*>/g, ' ').slice(0, 80) : '';
+        auras.push(k + ':' + (a ? a.name : '?') + (dsc ? ' [' + dsc + ']' : ''));
+    }
+    d.auras = auras;
+} catch (e) { d.dragonErr = '' + e; }
+try {
+    d.hasSwitcher = !!(Game.Has && Game.Has('Season switcher'));
+    d.season = Game.season;
+    var sc = {};
+    for (var k in Game.Upgrades) {
+        var u = Game.Upgrades[k];
+        if (!u.season || u.pool === 'switch') continue;
+        if (!sc[u.season]) sc[u.season] = {owned: 0, total: 0};
+        sc[u.season].total++; if (u.bought) sc[u.season].owned++;
+    }
+    d.seasonCounts = sc;
+    var names = ['Festive biscuit', 'Ghostly biscuit', 'Lovesick biscuit', 'Bunny biscuit', "Fool's biscuit"];
+    var biscuits = {};
+    for (var i = 0; i < names.length; i++) {
+        var u = Game.Upgrades[names[i]];
+        biscuits[names[i]] = u
+            ? {unlocked: !!u.unlocked, bought: !!u.bought, pool: u.pool,
+               price: (typeof u.getPrice === 'function') ? u.getPrice() : null}
+            : false;
+    }
+    d.biscuits = biscuits;
+    d.santaLevel = Game.santaLevel;
+    d.upgradeSantaType = typeof Game.UpgradeSanta;
+    // Any Christmas/festive/Santa/reindeer upgrade — find "Festive test tube" and
+    // see why it isn't bought (locked? not in season? unparseable? a pool we skip?).
+    var fest = [];
+    for (var k in Game.Upgrades) {
+        var u = Game.Upgrades[k];
+        if (!/festive|test tube|reindeer|santa|christmas|snow|joll|merri/i.test(u.name)) continue;
+        fest.push({name: u.name, pool: u.pool, season: u.season || '',
+                   unlocked: !!u.unlocked, bought: !!u.bought,
+                   inStore: (Game.UpgradesInStore || []).indexOf(u) >= 0});
+    }
+    d.festiveUpgrades = fest;
+} catch (e) { d.seasonErr = '' + e; }
+return d;
 """
 
 ASCEND_INFO = """
