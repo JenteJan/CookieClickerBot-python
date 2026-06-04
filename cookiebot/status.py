@@ -70,6 +70,10 @@ class BotStatus:
     dragon_auras: List[str] = field(default_factory=list)
     # Garden minigame: short live summary ('' = not playing).
     garden_summary: str = ""
+    # Heavenly/prestige tree progress.
+    heavenly_chips: float = 0.0
+    heavenly_owned: int = 0
+    heavenly_total: int = 0
 
     def update(self, **kwargs) -> None:
         for k, v in kwargs.items():
@@ -197,6 +201,9 @@ def render(status: BotStatus) -> Panel:
         grid.add_row("dragon", f"{lvl} · {auras}")
     if status.garden_summary:
         grid.add_row("garden", status.garden_summary)
+    if status.heavenly_total:
+        chips = f"{format_number(status.heavenly_chips)} chips" if status.heavenly_chips else "0 chips"
+        grid.add_row("heavenly", f"{status.heavenly_owned}/{status.heavenly_total} upgrades · {chips}")
 
     body = Group(grid, Text(), Text.from_markup(_HOTKEY_HINT, justify="center"))
     return Panel(body, title="Cookie Clicker Bot", border_style="yellow", expand=False)

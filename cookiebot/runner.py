@@ -116,6 +116,7 @@ class CookieBot:
         self._dragon_aura_logged = False
         self._aura_pending_logged = False
         self._aura_warn_logged = False
+        self._heavenly_warn_logged = False
         self._season_logged = False
         # Season dwell tracking for the stall-escape policy.
         self._season_cur: str | None = None
@@ -201,7 +202,8 @@ class CookieBot:
             log.exception("special-menu cleanup failed")
         try:
             check = self.driver.execute_script(scripts.SELF_CHECK) or {}
-            fails = {k: v for k, v in check.items() if v != "ok"}
+            # 'locked' = minigame not unlocked yet (expected), not a failure.
+            fails = {k: v for k, v in check.items() if v not in ("ok", "locked")}
             if fails:
                 log.warning("SELF-CHECK issues: %s | all: %s", fails, check)
             else:
@@ -486,50 +488,79 @@ class CookieBot:
         batch: list[list] = []  # compact actions for scripts.BULK_BUY
         bought: list[tuple[str, str, float, float]] = []  # (kind, name, price, score) for logging
 
+        def affordable(price: float) -> bool:
+            return self._affordable_with_reserve(bank, cookies_ps, price)
+
         for i in range(cap):
             best_b = max(bmodel.values(), key=lambda d: d["score"], default=None)
             best_u_uid = max(umodel, key=lambda k: umodel[k]["score"], default=None)
             b_score = best_b["score"] if best_b is not None else float("-inf")
             u_score = umodel[best_u_uid]["score"] if best_u_uid is not None else float("-inf")
 
-            # Past the first (exact) buy, only fast-path items that are pocket
-            # change vs. the remaining bank; anything pricier is a genuine save-up
-            # decision and is deferred to the next tick's exact re-evaluation.
-            def too_pricey_to_batch(price: float) -> bool:
-                return i > 0 and price > bank * cheap_fraction
-
+            # Highest-scored candidate overall (kind, ref, price, score).
             if u_score >= b_score and best_u_uid is not None:
-                price = umodel[best_u_uid]["price"]
-                if (
-                    u_score < min_score
-                    or too_pricey_to_batch(price)
-                    or not self._affordable_with_reserve(bank, cookies_ps, price)
-                ):
+                top = ("u", best_u_uid, umodel[best_u_uid]["price"], u_score)
+            elif best_b is not None:
+                top = ("b", best_b["name"], best_b["price"], b_score)
+            else:
+                break
+            if top[3] < min_score:
+                break
+
+            # Past the first (exact) buy, only fast-path pocket-change items; a
+            # pricier one is a real save-up decision, deferred to the next tick.
+            too_pricey = i > 0 and top[2] > bank * cheap_fraction
+
+            if not too_pricey and affordable(top[2]):
+                choice = top
+            elif i > 0:
+                break  # batch continuation only fast-paths cheap, affordable buys
+            else:
+                # First buy and the top item is unaffordable. Bank for it only if
+                # it's reachable soon; if it's far off, buy the best AFFORDABLE item
+                # instead so we keep compounding rather than idle for hours. A
+                # negative/zero wait means the reserve (not the price) is blocking —
+                # leave that alone so golden-cookie banking is preserved.
+                wait_s = (top[2] - bank) / cookies_ps if cookies_ps > 0 else float("inf")
+                if wait_s <= self.cfg.bank_horizon_s:
                     break
-                up = self.upgrades_by_id[best_u_uid]
-                batch.append(["u", best_u_uid])
-                bought.append(("upgrade", up.name, price, u_score))
+                ab = max(
+                    (d for d in bmodel.values()
+                     if d["score"] >= min_score and affordable(d["price"])),
+                    key=lambda d: d["score"], default=None,
+                )
+                au = max(
+                    (uid for uid in umodel
+                     if umodel[uid]["score"] >= min_score and affordable(umodel[uid]["price"])),
+                    key=lambda uid: umodel[uid]["score"], default=None,
+                )
+                ab_score = ab["score"] if ab is not None else float("-inf")
+                au_score = umodel[au]["score"] if au is not None else float("-inf")
+                if au is not None and au_score >= ab_score:
+                    choice = ("u", au, umodel[au]["price"], au_score)
+                elif ab is not None:
+                    choice = ("b", ab["name"], ab["price"], ab["score"])
+                else:
+                    break  # nothing affordable — bank
+
+            kind, ref, price, sc = choice
+            if kind == "u":
+                up = self.upgrades_by_id[ref]
+                batch.append(["u", ref])
+                bought.append(("upgrade", up.name, price, sc))
                 bank -= price
-                del umodel[best_u_uid]
+                del umodel[ref]
                 if up.name in GOLDEN_COOKIE_UPGRADE_NAMES:
                     # Owning another holding upgrade changes the reserve rule;
                     # stop so the next tick re-evaluates with the new count.
                     break
-            elif best_b is not None:
-                price = best_b["price"]
-                if (
-                    b_score < min_score
-                    or too_pricey_to_batch(price)
-                    or not self._affordable_with_reserve(bank, cookies_ps, price)
-                ):
-                    break
-                batch.append(["b", best_b["name"], 1])
-                bought.append(("building", best_b["name"], price, best_b["score"]))
-                bank -= price
-                best_b["price"] *= 1.15
-                best_b["score"] /= 1.15
             else:
-                break
+                d = bmodel[ref]
+                batch.append(["b", ref, 1])
+                bought.append(("building", ref, price, d["score"]))
+                bank -= price
+                d["price"] *= 1.15
+                d["score"] /= 1.15
 
         if not batch:
             return 0
@@ -983,6 +1014,26 @@ class CookieBot:
             elif ent.get("reason") and ent.get("reason") != "reserve" and not self._season_logged:
                 log.info("couldn't enter %s: %s", target, ent.get("reason"))
 
+    def heavenly_tick(self) -> None:
+        """Spend heavenly chips on the prestige tree (cheapest unlocked first).
+        Unspent chips do nothing and heavenly upgrades are permanent, so this is
+        pure upside. Self-verifying: if a buy doesn't take, it reports instead of
+        spinning (tells us whether the call needs the ascend screen)."""
+        res = self.driver.execute_script(scripts.BUY_HEAVENLY_UPGRADES) or {}
+        self._status.update(heavenly_chips=float(res.get("chips", 0.0)),
+                            heavenly_owned=int(res.get("owned", 0)),
+                            heavenly_total=int(res.get("total", 0)))
+        bought = res.get("bought") or []
+        if bought:
+            shown = ", ".join(bought[:4]) + ("…" if len(bought) > 4 else "")
+            log.info("heavenly: bought %d upgrade(s) via %s — %s (chips left %.0f)",
+                     len(bought), res.get("fn"), shown, float(res.get("chips", 0)))
+            self._status.update(last_action=f"heavenly +{len(bought)}")
+        elif res.get("failed") and not self._heavenly_warn_logged:
+            log.warning("heavenly buy of '%s' didn't take effect — may need the ascend "
+                        "screen or a different call; will keep trying", res.get("failed"))
+            self._heavenly_warn_logged = True
+
     def ascend_tick(self) -> None:
         info = self.driver.execute_script(scripts.ASCEND_INFO)
         prestige = float(info["prestige"])
@@ -1156,6 +1207,8 @@ class CookieBot:
             self._sched.every(self.cfg.dragon_period_s, self.dragon_tick, "dragon", delay_first=True)
         if self.cfg.auto_seasons:
             self._sched.every(self.cfg.season_period_s, self.season_tick, "seasons")
+        if self.cfg.auto_heavenly:
+            self._sched.every(self.cfg.heavenly_period_s, self.heavenly_tick, "heavenly")
 
     def tick_once(self) -> float:
         """Run one drain+schedule pass; returns seconds the caller may sleep.

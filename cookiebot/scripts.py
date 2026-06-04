@@ -1101,9 +1101,19 @@ try {
 try { r.santa = chk(typeof Game.UpgradeSanta === 'function' && typeof Game.santaLevel === 'number'); } catch(e){ r.santa = 'err'; }
 try { r.wrinklers = chk(Game.wrinklers && typeof Game.getWrinklersMax === 'function'); } catch(e){ r.wrinklers = 'err'; }
 try { r.golden = chk(Game.shimmers && Game.shimmerTypes && Game.shimmerTypes['golden']); } catch(e){ r.golden = 'err'; }
-try { var wt = Game.Objects['Wizard tower'] && Game.Objects['Wizard tower'].minigame; r.grimoire = chk(wt && wt.spellsById && wt.spellsById[1]); } catch(e){ r.grimoire = 'err'; }
-try { var tp = Game.Objects['Temple'] && Game.Objects['Temple'].minigame; r.pantheon = chk(tp && tp.slot); } catch(e){ r.pantheon = 'err'; }
-try { r.garden = chk(Game.Objects['Farm'] && Game.Objects['Farm'].minigame); } catch(e){ r.garden = 'err'; }
+// Minigames only exist once the building is leveled (a sugar lump). 'locked' is
+// expected on a fresh game and is NOT a failure — only a present-but-broken API is.
+function mg(name, ok) {
+    try {
+        var o = Game.Objects[name];
+        if (!o) return 'no-building';
+        if (!o.minigame) return 'locked';
+        return ok(o.minigame) ? 'ok' : 'FAIL';
+    } catch (e) { return 'err'; }
+}
+r.grimoire = mg('Wizard tower', function(m){ return !!(m.spellsById && m.spellsById[1]); });
+r.pantheon = mg('Temple', function(m){ return !!m.slot; });
+r.garden = mg('Farm', function(m){ return !!m.plantsById; });
 try { r.heavenly = chk(typeof Game.heavenlyChips === 'number' && typeof Game.UpgradesById === 'object'); } catch(e){ r.heavenly = 'err'; }
 return r;
 """
@@ -1146,6 +1156,44 @@ try {
     d.permanentSlotsOwned = slots;
 } catch (e) { d.err = '' + e; }
 return d;
+"""
+
+# Spend heavenly chips on heavenly (pool 'prestige') upgrades, cheapest unlocked
+# first (which naturally walks the prereq tree). Uses Game.PurchaseHeavenlyUpgrade
+# when present and VERIFIES each buy took (u.bought) — if it didn't, we stop and
+# report, so "needs the ascend screen" or a wrong API surfaces instead of spinning.
+# args: optional deny-list of names to skip. Returns what was bought + chips left.
+BUY_HEAVENLY_UPGRADES = """
+var deny = {};
+(arguments[0] || []).forEach(function(n){ deny[n] = 1; });
+var out = {ok: false, bought: [], failed: '', chips: 0, owned: 0, total: 0, fn: ''};
+if (typeof Game === 'undefined' || typeof Game.heavenlyChips !== 'number') return out;
+var hasFn = typeof Game.PurchaseHeavenlyUpgrade === 'function';
+out.fn = hasFn ? 'PurchaseHeavenlyUpgrade' : 'buy';
+var guard = 0;
+while (guard++ < 300) {
+    var best = null;
+    for (var k in Game.Upgrades) {
+        var u = Game.Upgrades[k];
+        if (u.pool !== 'prestige' || u.bought || !u.unlocked || deny[u.name]) continue;
+        if (Game.heavenlyChips < u.basePrice) continue;
+        if (best === null || u.basePrice < best.basePrice) best = u;
+    }
+    if (!best) break;
+    if (hasFn) Game.PurchaseHeavenlyUpgrade(best); else if (best.buy) best.buy();
+    if (best.bought) out.bought.push(best.name);
+    else { out.failed = best.name; break; }   // buy didn't take — stop, report
+}
+// tallies for the status panel
+for (var k in Game.Upgrades) {
+    var u = Game.Upgrades[k];
+    if (u.pool !== 'prestige') continue;
+    out.total++; if (u.bought) out.owned++;
+}
+out.chips = Game.heavenlyChips;
+if (out.bought.length && typeof Game.CalculateGains === 'function') Game.CalculateGains();
+out.ok = true;
+return out;
 """
 
 ASCEND_INFO = """

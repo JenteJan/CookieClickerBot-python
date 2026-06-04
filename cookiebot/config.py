@@ -118,6 +118,7 @@ PROFILE_FIELDS = (
     "bulk_buy",
     "bulk_max_buys",
     "bulk_cheap_fraction",
+    "bank_horizon_s",
     "auto_ascend",
     "auto_ascend_gain_pct",
     "auto_train_dragon",
@@ -128,6 +129,8 @@ PROFILE_FIELDS = (
     "auto_seasons",
     "season_period_s",
     "season_max_dwell_s",
+    "auto_heavenly",
+    "heavenly_period_s",
     "disable_rendering",
     "purchase_period_s",
     "auto_garden",
@@ -262,6 +265,14 @@ class Config:
     # buys you could afford 50× over. Lower = stricter/more accurate, slower
     # catch-up; raise toward 1.0 to batch more aggressively. 0 = one buy per tick.
     bulk_cheap_fraction: float = 0.02
+    # Banking horizon. The bot buys the best value-per-cost item, banking when it's
+    # unaffordable — but banking forfeits the compounding of cheaper buys you could
+    # make meanwhile. So bank for the top item only if it's reachable within this
+    # many seconds of CpS; if it's further off, buy the best AFFORDABLE item instead
+    # (keep compounding) and revisit the big one as the bank grows. Prevents the bot
+    # idling for hours saving for one far-off upgrade. The golden-cookie reserve is
+    # still honoured (a negative/zero wait = reserve banking, left untouched).
+    bank_horizon_s: float = 180.0
     # Auto-ascension. Off by default — ascending is a soft reset. When on, the
     # bot reincarnates once ascending now would raise prestige level by at least
     # auto_ascend_gain_pct (relative to current). Heavenly chips persist unspent.
@@ -305,6 +316,12 @@ class Config:
     # reserve as normal buys.
     auto_seasons: bool = False
     season_period_s: float = 15.0
+    # Auto-spend heavenly chips on heavenly (prestige-tree) upgrades, cheapest
+    # unlocked first — which walks the prereq tree. Unspent chips do nothing, and
+    # heavenly upgrades are permanent across every future run, so this is on by
+    # default. Checked on heavenly_period_s and right after an auto-ascend.
+    auto_heavenly: bool = True
+    heavenly_period_s: float = 60.0
     # A season is normally held until every one of its collectibles is obtained
     # (instant for Valentine's hearts, RNG for Halloween/Easter/Christmas drops),
     # so we don't pay the switch-biscuit cost re-entering. This is a safety escape:

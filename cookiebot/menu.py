@@ -224,6 +224,8 @@ def _settings_entries() -> list:
         ("Dragon auras", lambda c: c.dragon_aura_combo, _pick_dragon_auras),
         _bool_entry("Auto-play seasons/holidays", "auto_seasons",
                     "Auto-play seasons/holidays? (enter a season, collect upgrades, level Santa, cycle — needs 'Season switcher')"),
+        _bool_entry("Auto-spend heavenly chips", "auto_heavenly",
+                    "Auto-buy heavenly (prestige-tree) upgrades, cheapest unlocked first?"),
         _bool_entry("Auto-play garden", "auto_garden", "Auto-play the garden? (breed seeds, then steady-state layout)"),
         ("Garden strategy", lambda c: c.garden_strategy,
          lambda c: setattr(c, "garden_strategy", Prompt.ask("Garden strategy (cps/golden/juicy)", choices=["cps", "golden", "juicy"], default=c.garden_strategy))),
