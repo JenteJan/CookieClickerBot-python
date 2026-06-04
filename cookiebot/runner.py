@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import queue
 import time
@@ -21,6 +22,7 @@ from cookiebot.config import (
     Config,
     is_never_buy_upgrade,
     profile_backups_dir,
+    profile_dir,
     profile_save_file,
     profile_trials_dir,
 )
@@ -130,6 +132,12 @@ class CookieBot:
         self._combo_nogrimoire_logged = False
         self._click_buff_on = False
         self._cps_combo_on = False
+        # Detailed per-combo debug log (file).
+        self._combo_fh = None
+        self._combo_log_active = False
+        self._combo_log_start_t = 0.0
+        self._combo_log_start_cookies = 0.0
+        self._combo_log_peak = 1.0
         self._sell_mode_logged = False
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
@@ -164,6 +172,7 @@ class CookieBot:
         if self.cfg.ab_seed:
             log.info("A/B mode: RNG seeded with %r", self.cfg.ab_seed)
         self._init_trial_log()
+        self._init_combo_log()
         if self.cfg.fresh:
             log.info("hard-resetting game state (fresh start)")
             self.driver.execute_script(scripts.HARD_RESET)
@@ -753,6 +762,66 @@ class CookieBot:
             log.info("COMBO: %d-buff stack but the Grimoire (Wizard tower minigame) isn't "
                      "unlocked yet — no FtHoF until it is", n)
             self._combo_nogrimoire_logged = True
+        self._combo_log_tick(res)
+
+    # ---- detailed combo debug log -----------------------------------------
+
+    def _init_combo_log(self) -> None:
+        if not self.cfg.combo_log:
+            return
+        try:
+            stamp = self.driver.execute_script("return String(Date.now());")
+            path = profile_dir(self.cfg.save_profile) / "combos" / f"combo_{stamp}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._combo_fh = open(path, "a", buffering=1)
+            log.info("combo debug log → %s", path)
+        except Exception:
+            log.exception("could not open combo log")
+
+    def _combo_write(self, record: dict) -> None:
+        if self._combo_fh is None:
+            return
+        try:
+            self._combo_fh.write(json.dumps(record) + "\n")
+        except Exception:
+            log.exception("combo log write failed")
+
+    def _combo_log_tick(self, res: dict) -> None:
+        """Record the full combo picture every tick a combo is active (or an
+        FtHoF/sell/loan event fired), bracketed by start/end markers — so an
+        overnight run leaves a complete, replayable record of every super-combo."""
+        if self._combo_fh is None:
+            return
+        mult = float(res.get("mult", 1.0))
+        click = float(res.get("clickMult", 1.0))
+        events = res.get("events") or []
+        active = mult >= 1.5 or click > 1.0
+        now = time.monotonic()
+        if active and not self._combo_log_active:
+            self._combo_log_active = True
+            self._combo_log_start_t = now
+            self._combo_log_start_cookies = float(res.get("cookies") or 0.0)
+            self._combo_log_peak = mult
+            self._combo_write({"kind": "start", "t": res.get("now"),
+                               "cookies": res.get("cookies"), "mult": mult,
+                               "cpsBuffs": res.get("cpsBuffs"), "clickBuffs": res.get("clickBuffs")})
+        if active or events:
+            self._combo_log_peak = max(self._combo_log_peak, mult)
+            self._combo_write({
+                "kind": "tick", "t": res.get("now"), "cookies": res.get("cookies"),
+                "cookiesPs": res.get("cookiesPs"), "unbuffedCps": res.get("unbuffedCps"),
+                "mult": mult, "clickMult": click, "magic": res.get("magic"),
+                "magicM": res.get("magicM"), "ftofCost": res.get("ftofCost"),
+                "buffs": res.get("buffDetails"), "shimmers": res.get("shimmers"),
+                "events": events,
+            })
+        if not active and self._combo_log_active:
+            self._combo_log_active = False
+            gained = float(res.get("cookies") or 0.0) - self._combo_log_start_cookies
+            self._combo_write({"kind": "end", "t": res.get("now"),
+                               "durationS": round(now - self._combo_log_start_t, 1),
+                               "peakMult": round(self._combo_log_peak, 1),
+                               "cookiesGained": gained, "cookies": res.get("cookies")})
 
     def achievement_threshold_tick(self) -> None:
         # Click the ticker only when it's genuinely useful: a fortune is showing,

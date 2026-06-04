@@ -567,26 +567,32 @@ function buffNames(extraNames) {
     return hits;
 }
 
-// Instrumented so the cast is observable from the bot log: report the active
-// buffs, the live CpS multiplier (buffed/unbuffed), the Grimoire magic vs. FtHoF
-// cost, and whether the cast ACTUALLY landed (castSpell returns false on low magic).
+// Fully instrumented for combo debugging. Besides casting FtHoF on a buff stack,
+// it records EVERYTHING about the moment — every active buff (CpS & click mult +
+// time left), the live multiplier, shimmers on screen, magic vs. cost, and the
+// exact cast / sell / loan actions (including the async juicy second cast) — into
+// a window-global event buffer that the Python side drains and writes to disk, so
+// an overnight run leaves a complete per-combo record.
+if (!window._botComboEvents) window._botComboEvents = [];
+function ev(o) { o.t = Date.now(); window._botComboEvents.push(o); }
+
 var out = {hasGrimoire: false, n: 0, buffs: [], magic: null, magicM: null,
-           ftofCost: null, cast: false, mult: 1, goldens: 0};
+           ftofCost: null, cast: false, mult: 1, goldens: 0, now: Date.now(),
+           cookies: Game.cookies, cookiesPs: Game.cookiesPs, unbuffedCps: Game.unbuffedCps,
+           buffDetails: [], shimmers: []};
 out.buffs = buffNames();
 out.n = out.buffs.length;
 if (Game.unbuffedCps > 0) out.mult = Game.cookiesPs / Game.unbuffedCps;
 out.goldens = Game.shimmers ? Game.shimmers.length : 0;
-// Click buffs (Dragonflight, Click frenzy, Cursed finger, …) multiply CLICK
-// power, not CpS — so they never show up in out.mult above. Surface them so the
-// autoclicker's payoff is visible.
+if (Game.shimmers) for (var si = 0; si < Game.shimmers.length; si++) out.shimmers.push(Game.shimmers[si].type);
+// Click buffs (Dragonflight, Click frenzy, …) multiply CLICK power, not CpS.
 out.clickMult = 1; out.clickBuffs = []; out.cpsBuffs = [];
 for (var bn in Game.buffs) {
     var bf = Game.buffs[bn];
     if (!bf) continue;
+    out.buffDetails.push({name: bn, cps: bf.multCpS || 1, click: bf.multClick || 1,
+                          time: bf.time, maxTime: bf.maxTime});
     if (bf.multClick && bf.multClick > 1) { out.clickMult *= bf.multClick; out.clickBuffs.push(bn); }
-    // Every CpS-boosting buff by name: Frenzy, Dragon harvest, Elder frenzy, and
-    // the per-building specials (Brainstorm, Ore vein, Refactoring, …). The fixed
-    // FRENZY_BUFFS list above misses some of these; this catches them all.
     if (bf.multCpS && bf.multCpS > 1) out.cpsBuffs.push(bn);
 }
 var wiz = Game.ObjectsById[7] ? Game.ObjectsById[7].minigame : null;
@@ -597,28 +603,34 @@ if (wiz) {
     var spell = wiz.spellsById[1];
     if (spell) out.ftofCost = (spell.costMin || 0) + (spell.costPercent || 0) * wiz.magicM;
     if (out.n >= 2 && spell) {
+        var mb = wiz.magic;
         out.cast = !!wiz.castSpell(spell);
+        ev({type: 'ftof', n: out.n, mult: out.mult, magicBefore: mb, magicAfter: wiz.magic,
+            cost: out.ftofCost, ok: out.cast, buffs: out.buffs, cookies: Game.cookies});
         if (out.cast) {
             setTimeout(function() {
-                if (buffNames(["Click frenzy", "Dragonflight"]).length >= 3) {
+                var jb = buffNames(["Click frenzy", "Dragonflight"]);
+                if (jb.length >= 3) {
                     Game.ObjectsById[7].sell(400);
+                    ev({type: 'sell', building: 'Wizard tower', qty: 400, buffs: jb, cookies: Game.cookies});
                     var bank = Game.ObjectsById[5].minigame;
                     if (bank) {
                         // takeLoan() does NOT check the unlock gate — calling it on a
                         // locked loan still spends the 20-50%-of-bank downpayment. Gate
-                        // on office level using the game's own thresholds (loan 1 > 1,
-                        // loan 2 > 3). Loan 3 is skipped on purpose: +20% for 2 days
-                        // then -20% for 5 days is the opposite of a burst. takeLoan
-                        // already no-ops a loan that's currently active.
-                        if (bank.officeLevel > 1) bank.takeLoan(1);
-                        if (bank.officeLevel > 3) bank.takeLoan(2);
+                        // on office level (loan 1 > 1, loan 2 > 3). Loan 3 is skipped:
+                        // +20% for 2 days then -20% for 5 days is the opposite of a burst.
+                        if (bank.officeLevel > 1) { bank.takeLoan(1); ev({type: 'loan', id: 1}); }
+                        if (bank.officeLevel > 3) { bank.takeLoan(2); ev({type: 'loan', id: 2}); }
                     }
-                    wiz.castSpell(wiz.spellsById[1]);
+                    var mb2 = wiz.magic;
+                    var ok2 = !!wiz.castSpell(wiz.spellsById[1]);
+                    ev({type: 'ftof2', magicBefore: mb2, magicAfter: wiz.magic, ok: ok2, cookies: Game.cookies});
                 }
             }, 1000);
         }
     }
 }
+out.events = window._botComboEvents.splice(0);   // drain what's accumulated since last tick
 return out;
 """
 

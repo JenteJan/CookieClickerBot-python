@@ -120,6 +120,7 @@ PROFILE_FIELDS = (
     "bulk_max_buys",
     "bulk_cheap_fraction",
     "bank_horizon_s",
+    "combo_log",
     "auto_ascend",
     "auto_ascend_gain_pct",
     "auto_train_dragon",
@@ -282,6 +283,12 @@ class Config:
     # affordable (then just buy it). This constant only clamps the worst case so the
     # bot can't idle absurdly long. Set higher to allow longer end-game saves.
     bank_horizon_s: float = 3600.0
+    # Write a detailed per-combo debug log to saves/profiles/<name>/combos/ — every
+    # buff (CpS/click mult + time), the live multiplier, shimmers, magic vs. FtHoF
+    # cost, and the exact cast/sell/loan actions, plus a per-combo end summary
+    # (duration, peak ×, cookies gained). On by default; only writes during combos
+    # so it stays small. Lets you leave the bot running and dissect combos later.
+    combo_log: bool = True
     # Auto-ascension. Off by default — ascending is a soft reset. When on, the
     # bot reincarnates once ascending now would raise prestige level by at least
     # auto_ascend_gain_pct (relative to current). Heavenly chips persist unspent.
