@@ -200,10 +200,24 @@ class CookieBot:
         except Exception:
             log.exception("special-menu cleanup failed")
         try:
+            check = self.driver.execute_script(scripts.SELF_CHECK) or {}
+            fails = {k: v for k, v in check.items() if v != "ok"}
+            if fails:
+                log.warning("SELF-CHECK issues: %s | all: %s", fails, check)
+            else:
+                log.info("SELF-CHECK: all subsystems ok (%d)", len(check))
+        except Exception:
+            log.exception("self-check failed")
+        try:
             diag = self.driver.execute_script(scripts.DIAGNOSE_DRAGON_SEASON)
             log.info("DIAG dragon/season: %s", diag)
         except Exception:
             log.exception("dragon/season diagnostic failed")
+        try:
+            heav = self.driver.execute_script(scripts.DIAGNOSE_HEAVENLY)
+            log.info("DIAG heavenly: %s", heav)
+        except Exception:
+            log.exception("heavenly diagnostic failed")
 
         # Batch barrier: signal we're loaded, wait for the shared start moment,
         # then begin playing — so all instances start at the same instant.

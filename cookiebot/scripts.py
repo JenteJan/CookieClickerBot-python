@@ -1086,6 +1086,68 @@ try {
 return d;
 """
 
+# Reliability self-check: probe each subsystem's required live-game API and return
+# 'ok' / 'FAIL' / 'err'. Logged once at startup so a build mismatch (the kind that
+# silently broke auras / seasons) surfaces immediately instead of via a bug report.
+SELF_CHECK = """
+var r = {};
+function chk(c){ return c ? 'ok' : 'FAIL'; }
+try { r.dragon = chk(Game.dragonAuras && Game.dragonLevels && typeof Game.UpgradeDragon === 'function'); } catch(e){ r.dragon = 'err'; }
+try { r.dragonAuraSettable = chk(typeof Game.dragonAura === 'number'); } catch(e){ r.dragonAuraSettable = 'err'; }
+try {
+    var drops = !!(Game.reindeerDrops && Game.halloweenDrops && Game.easterEggs && Game.heartDrops);
+    r.season = chk(typeof Game.season !== 'undefined' && Game.Has) + (drops ? '' : ' (drops-missing)');
+} catch(e){ r.season = 'err'; }
+try { r.santa = chk(typeof Game.UpgradeSanta === 'function' && typeof Game.santaLevel === 'number'); } catch(e){ r.santa = 'err'; }
+try { r.wrinklers = chk(Game.wrinklers && typeof Game.getWrinklersMax === 'function'); } catch(e){ r.wrinklers = 'err'; }
+try { r.golden = chk(Game.shimmers && Game.shimmerTypes && Game.shimmerTypes['golden']); } catch(e){ r.golden = 'err'; }
+try { var wt = Game.Objects['Wizard tower'] && Game.Objects['Wizard tower'].minigame; r.grimoire = chk(wt && wt.spellsById && wt.spellsById[1]); } catch(e){ r.grimoire = 'err'; }
+try { var tp = Game.Objects['Temple'] && Game.Objects['Temple'].minigame; r.pantheon = chk(tp && tp.slot); } catch(e){ r.pantheon = 'err'; }
+try { r.garden = chk(Game.Objects['Farm'] && Game.Objects['Farm'].minigame); } catch(e){ r.garden = 'err'; }
+try { r.heavenly = chk(typeof Game.heavenlyChips === 'number' && typeof Game.UpgradesById === 'object'); } catch(e){ r.heavenly = 'err'; }
+return r;
+"""
+
+# Discovery dump for the (not-yet-built) prestige layer: heavenly chips, the
+# heavenly-upgrade pool ('prestige'), the cheapest unbought-but-unlocked ones with
+# their chip cost, the permanent-upgrade slots, and the typeof candidate buy/assign
+# functions — so the heavenly auto-buyer is built against the real API. Pure reads.
+DIAGNOSE_HEAVENLY = """
+var d = {};
+try {
+    d.heavenlyChips = Game.heavenlyChips;
+    d.heavenlyChipsEarned = Game.heavenlyChipsEarned;
+    d.prestige = Game.prestige;
+    var owned = 0, total = 0, avail = [];
+    for (var k in Game.Upgrades) {
+        var u = Game.Upgrades[k];
+        if (u.pool !== 'prestige') continue;
+        total++;
+        if (u.bought) { owned++; continue; }
+        if (u.unlocked) avail.push({name: u.name, id: u.id, cost: u.basePrice,
+                                    canAfford: Game.heavenlyChips >= u.basePrice});
+    }
+    d.prestigeUpgrades = {owned: owned, total: total, unlockedUnbought: avail.length};
+    avail.sort(function(a, b){ return a.cost - b.cost; });
+    d.nextHeavenly = avail.slice(0, 10);
+    // How do you BUY one / ASSIGN a permanent slot? Report typeofs to pick the API.
+    d.fns = {
+        upgradeBuy: (Game.UpgradesById && Game.UpgradesById[0]) ? typeof Game.UpgradesById[0].buy : 'n/a',
+        PurchaseHeavenlyUpgrade: typeof Game.PurchaseHeavenlyUpgrade,
+        BuildAscendTree: typeof Game.BuildAscendTree,
+        AssignPermanentUpgrade: typeof Game.AssignPermanentUpgrade,
+        ascendMetaType: typeof Game.ascendMeta
+    };
+    d.permanentUpgrades = Game.permanentUpgrades ? Game.permanentUpgrades.slice() : 'absent';
+    // How many permanent slots are unlocked (heavenly 'Permanent upgrade slot I..V').
+    var slotNames = ['Permanent upgrade slot I','Permanent upgrade slot II','Permanent upgrade slot III','Permanent upgrade slot IV','Permanent upgrade slot V'];
+    var slots = 0;
+    for (var i = 0; i < slotNames.length; i++) { var su = Game.Upgrades[slotNames[i]]; if (su && su.bought) slots++; }
+    d.permanentSlotsOwned = slots;
+} catch (e) { d.err = '' + e; }
+return d;
+"""
+
 ASCEND_INFO = """
 return {
     prestige: Game.prestige,
