@@ -121,6 +121,9 @@ class CookieBot:
         self._season_cur: str | None = None
         self._season_last_owned = 0
         self._season_progress_at = 0.0
+        # Idle-reason logging: distinguish "banking" from an actual stall.
+        self._last_buy_at = 0.0
+        self._last_idle_log_at = 0.0
         self._sell_mode_logged = False
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
@@ -287,7 +290,14 @@ class CookieBot:
         if cookies_ps <= 0:
             # Game just started — wait for the best-heuristic building. Clicking
             # at ~40 c/s reaches 100 c (Grandma) in ~2.5 s, and Grandma's CPS
-            # per cost beats Cursors at that price point.
+            # per cost beats Cursors at that price point. On a *loaded* save CpS
+            # should never be 0, so flag it (throttled) — that's the classic
+            # "loaded an established save but the bot does nothing" symptom.
+            now = time.monotonic()
+            if now - self._last_idle_log_at >= 15.0:
+                self._last_idle_log_at = now
+                log.info("CpS reads 0 with %d buildings (save still loading, or store "
+                         "paused?) — buying best building if affordable", len(buildings))
             best = max(buildings, key=lambda b: b.heuristic)
             if cookies >= best.price:
                 self._buy_building(best)
@@ -367,12 +377,43 @@ class CookieBot:
         if best_bundle is not None and best_bundle_score >= max(
             building_best_score, best_upgrade[1], min_score
         ):
-            self._maybe_buy_bundle(best_bundle, cookies, cookies_ps)
+            acted = self._maybe_buy_bundle(best_bundle, cookies, cookies_ps)
         else:
-            self._buy_drain(
+            acted = bool(self._buy_drain(
                 cookies, cookies_ps, buildings, scored_upgrades,
                 store_prices, building_score, min_score,
-            )
+            ))
+
+        # Visibility: on a mature save the bot often "looks idle" because the best
+        # buy is unaffordable and it's banking. Say so (throttled) instead of
+        # silently doing nothing, so an actual stall is distinguishable from
+        # correct banking.
+        now = time.monotonic()
+        if acted:
+            self._last_buy_at = now
+        elif now - self._last_idle_log_at >= 15.0 and now - self._last_buy_at >= 10.0:
+            self._last_idle_log_at = now
+            self._note_idle(cookies, cookies_ps, building_best_score,
+                            best_building, best_upgrade, store_prices, reserve_target)
+
+    def _note_idle(self, cookies, cookies_ps, building_best_score, best_building,
+                   best_upgrade, store_prices, reserve_target_s) -> None:
+        """Log why nothing was bought this tick (banking vs. nothing-worthwhile)."""
+        uid, uscore = best_upgrade
+        if uscore > building_best_score and uid is not None:
+            name, price = self.upgrades_by_id[uid].name, store_prices.get(uid, 0.0)
+        else:
+            name, price = best_building.name, best_building.price
+        reserve_cookies = cookies_ps * reserve_target_s
+        short = max(0.0, price + reserve_cookies - cookies)
+        eta = short / cookies_ps if cookies_ps > 0 else float("inf")
+        if short > 0:
+            log.info("banking for %s: %.2e cookies short (~%.0fs at current CpS%s)",
+                     name, short, eta,
+                     f", reserve {reserve_target_s:g}s" if reserve_target_s else "")
+        else:
+            log.info("idle: best buy %s is affordable but scored below threshold "
+                     "(have %.2e, cps %.2e)", name, cookies, cookies_ps)
 
     def _buy_drain(
         self,
@@ -472,7 +513,7 @@ class CookieBot:
                 break
 
         if not batch:
-            return
+            return 0
 
         # Coalesce consecutive same-building buys into one buy(qty) call.
         coalesced: list[list] = []
@@ -504,6 +545,7 @@ class CookieBot:
                     self._status.update(golden_count=self.golden_count)
             if self._trial is not None:
                 self._trial.buy(kind, name, price, score)
+        return len(bought)
 
     def _update_next_buys(
         self,
@@ -566,10 +608,10 @@ class CookieBot:
         if self._trial is not None:
             self._trial.buy("building", b.name, b.price, b.heuristic)
 
-    def _maybe_buy_bundle(self, bundle: dict, cookies: float, cookies_ps: float) -> None:
+    def _maybe_buy_bundle(self, bundle: dict, cookies: float, cookies_ps: float) -> bool:
         cost = float(bundle["cost"])
         if not self._affordable_with_reserve(cookies, cookies_ps, cost):
-            return
+            return False
         name, qty, up_id = bundle["building"], int(bundle["qty"]), int(bundle["upgradeId"])
         log.info("buy bundle: %d × %s + tier upgrade #%d (cost %.2e)", qty, name, up_id, cost)
         bought = self.driver.execute_script(scripts.BUY_TIER_BUNDLE, name, qty, up_id)
@@ -583,6 +625,7 @@ class CookieBot:
         self._tier_bundles = [b for b in self._tier_bundles if b is not bundle]
         if not bought:
             log.info("bundle upgrade #%d didn't apply (locked?)", up_id)
+        return True
 
     def lucky_tick(self) -> None:
         self.driver.execute_script(scripts.GET_LUCKY)
@@ -667,6 +710,14 @@ class CookieBot:
             self._status.update(
                 last_action=f"garden: +{planted} planted / -{harvested} harvested"
             )
+        # Persistent garden line for the side-quests panel.
+        tiles = snap.get("tiles") or []
+        if tiles:
+            filled = sum(1 for t in tiles if t.get("id"))
+            ripe = sum(1 for t in tiles if t.get("mature"))
+            self._status.update(garden_summary=f"{filled}/{len(tiles)} tiles · {ripe} ripe")
+        else:
+            self._status.update(garden_summary="active")
 
     def _init_trial_log(self) -> None:
         if not self.cfg.ab_log:
@@ -766,6 +817,9 @@ class CookieBot:
                 self.cfg.dragon_keep_buildings,
                 self.cfg.dragon_sacrifice_bank_fraction,
             ) or {}
+            if info.get("level") is not None:
+                self._status.update(dragon_level=int(info["level"]),
+                                    dragon_max=int(info.get("max", 0)))
             trained = info.get("trained") or []
             if trained:
                 log.info("dragon leveled +%d → %s", len(trained), trained[-1])
@@ -786,6 +840,10 @@ class CookieBot:
             prefs = [s.strip() for s in self.cfg.dragon_aura_combo.split(",") if s.strip()]
             if prefs:
                 res = self.driver.execute_script(scripts.SET_DRAGON_AURAS, prefs) or {}
+                if res.get("dragonLevel") is not None:
+                    self._status.update(dragon_level=int(res["dragonLevel"]),
+                                        dragon_max=int(res.get("dragonMax", 0)),
+                                        dragon_auras=res.get("equipped", []))
                 if res.get("changed"):
                     names = ", ".join(res["changed"])
                     log.info("dragon auras equipped: %s", names)
@@ -839,6 +897,9 @@ class CookieBot:
         counts = res.get("counts", {})
         santa_level = int(res.get("santaLevel", -1))
         santa_max = int(res.get("santaMax", 0))
+        # Surface holiday progress in the live status panel.
+        self._status.update(season=cur, season_counts=counts,
+                            santa_level=santa_level, santa_max=santa_max)
         if res.get("santa"):
             log.info("Santa leveled +%d (now %s/%s)", res["santa"], santa_level, santa_max)
         if res.get("bought"):

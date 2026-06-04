@@ -802,6 +802,8 @@ for (var guard = 0; guard < 60; guard++) {
     if (Game.dragonLevel > lvl) out.trained.push(me.name);
     else { out.waiting = {level: lvl, name: me.name}; break; }   // didn't advance — avoid a spin
 }
+out.level = Game.dragonLevel;
+out.max = levels ? levels.length - 1 : 0;
 """ + _CLOSE_SPECIAL + """
 return out;
 """
@@ -817,9 +819,11 @@ return out;
 SET_DRAGON_AURAS = """
 var prefs = arguments[0] || [];
 var out = {ok: false, set: [], changed: [], pending: [], missing: [], failed: [],
-           slots: 0, dragonLevel: null, unlockedMax: null, noSetFn: false};
+           equipped: [], slots: 0, dragonLevel: null, dragonMax: 0,
+           unlockedMax: null, noSetFn: false};
 if (typeof Game === 'undefined' || !Game.dragonAuras || !Game.dragonLevels) return out;
 out.dragonLevel = Game.dragonLevel;
+out.dragonMax = Game.dragonLevels.length - 1;
 var unlockedMax = Game.dragonLevel - 4;                 // highest unlocked aura id
 out.unlockedMax = unlockedMax;
 var fullyTrained = Game.dragonLevel >= Game.dragonLevels.length - 1;
@@ -830,6 +834,13 @@ function auraId(name) {
         if (a && a.name === name) return (a.id !== undefined) ? a.id : (k | 0);
     }
     return -1;
+}
+function auraName(id) {
+    for (var k in Game.dragonAuras) {
+        var a = Game.dragonAuras[k];
+        if (a && ((a.id !== undefined ? a.id : (k | 0)) === id)) return a.name;
+    }
+    return '';
 }
 for (var s = 0; s < prefs.length; s++) {
     var id = auraId(prefs[s]);
@@ -846,6 +857,9 @@ for (var s = 0; s < prefs.length; s++) {
     else out.failed.push(prefs[s]);
 }
 if (out.changed.length && typeof Game.CalculateGains === 'function') Game.CalculateGains();
+// Report the actually-equipped aura names (for the status panel).
+var n0 = auraName(Game.dragonAura); if (n0 && n0 !== 'No aura') out.equipped.push(n0);
+var n1 = auraName(Game.dragonAura2); if (n1 && n1 !== 'No aura') out.equipped.push(n1);
 """ + _CLOSE_SPECIAL + """
 out.ok = true;
 return out;

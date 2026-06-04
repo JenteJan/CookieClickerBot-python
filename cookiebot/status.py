@@ -53,6 +53,19 @@ class BotStatus:
     next_buys: List[Tuple[str, float, bool]] = field(default_factory=list)
     # Cookie reserve we're banking toward (CPS-seconds). 0 = no reserve (buy freely).
     reserve_target_s: float = 0.0
+    # ---- side quests / minigames (shown only when active) ----
+    # Current holiday season ('' = none) and per-season collection progress
+    # {season: {owned, total}} from the season tick, plus Santa's level.
+    season: str = ""
+    season_counts: dict = field(default_factory=dict)
+    santa_level: int = -1
+    santa_max: int = 0
+    # Krumblor: current level / max and the equipped aura names.
+    dragon_level: int = -1
+    dragon_max: int = 0
+    dragon_auras: List[str] = field(default_factory=list)
+    # Garden minigame: short live summary ('' = not playing).
+    garden_summary: str = ""
 
     def update(self, **kwargs) -> None:
         for k, v in kwargs.items():
@@ -100,6 +113,43 @@ def _format_next_buys(next_buys: List[Tuple[str, float, bool]]) -> str:
     return "\n".join(lines)
 
 
+# Holiday display order + short labels. Christmas also shows Santa's level.
+_HOLIDAYS = [
+    ("christmas", "Xmas"), ("valentines", "Valentine"),
+    ("halloween", "Halloween"), ("easter", "Easter"),
+]
+
+
+def _holiday_done(status: BotStatus, key: str, c: dict) -> bool:
+    owned, total = c.get("owned", 0), c.get("total", 0)
+    if total <= 0 or owned < total:
+        return False
+    if key == "christmas" and status.santa_max and status.santa_level < status.santa_max:
+        return False
+    return True
+
+
+def _format_holidays(status: BotStatus) -> str:
+    """One line per holiday with collection progress; current season highlighted,
+    finished ones green, the rest dim."""
+    lines = []
+    for key, label in _HOLIDAYS:
+        c = status.season_counts.get(key)
+        if not c:
+            continue
+        seg = f"{label} {c.get('owned', 0)}/{c.get('total', 0)}"
+        if key == "christmas" and status.santa_max > 0:
+            seg += f"  santa {max(status.santa_level, 0)}/{status.santa_max}"
+        if key == status.season:
+            seg = f"[bold blue]▶ {seg}[/]  [dim](here)[/]"
+        elif _holiday_done(status, key, c):
+            seg = f"[green]✓ {seg}[/]"
+        else:
+            seg = f"[dim]  {seg}[/]"
+        lines.append(seg)
+    return "\n".join(lines) if lines else "[dim]—[/]"
+
+
 def render(status: BotStatus) -> Panel:
     uptime = format_duration(time.monotonic() - status.started_at)
     state = "[yellow]paused[/]" if status.paused else "[green]running[/]"
@@ -119,6 +169,19 @@ def render(status: BotStatus) -> Panel:
     grid.add_row("wrinklers", "auto-pop (frenzy)" if status.wrinkler_auto_frenzy else "holding")
     grid.add_row("last action", status.last_action)
     grid.add_row("next buys", _format_next_buys(status.next_buys))
+
+    # Side quests / minigames — only rendered when there's something to show.
+    if status.season_counts:
+        grid.add_row("", "")  # spacer
+        grid.add_row("holidays", _format_holidays(status))
+    if status.dragon_level >= 0:
+        auras = ", ".join(status.dragon_auras) if status.dragon_auras else "[dim]none[/]"
+        maxed = status.dragon_max and status.dragon_level >= status.dragon_max
+        lvl = f"L{status.dragon_level}/{status.dragon_max}"
+        lvl = f"[green]{lvl}[/]" if maxed else lvl
+        grid.add_row("dragon", f"{lvl} · {auras}")
+    if status.garden_summary:
+        grid.add_row("garden", status.garden_summary)
 
     body = Group(grid, Text(), Text.from_markup(_HOTKEY_HINT, justify="center"))
     return Panel(body, title="Cookie Clicker Bot", border_style="yellow", expand=False)
