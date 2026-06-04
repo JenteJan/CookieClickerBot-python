@@ -851,59 +851,68 @@ out.ok = true;
 return out;
 """
 
-# Auto-play seasons: enter a season, collect its upgrades cheapest-first (fastest
-# CpS per cookie), level Santa during Christmas, then cycle to the next incomplete
-# season. Needs the 'Season switcher' heavenly upgrade (without it seasons can't be
-# forced). Every game call is feature-detected so a mismatched build just no-ops.
-# args: reserveSeconds (cookies-of-CpS to keep banked), cycle (ordered season list).
-SEASON_TICK = """
+# Seasonal collectibles come from the game's own per-season DROP ARRAYS, not the
+# `.season` tag (which most builds leave '' on the actual upgrades). These are the
+# canonical lists the game rolls drops from:
+#   valentines -> heartDrops (bought directly from the store — instant)
+#   halloween  -> halloweenDrops (RNG off wrinklers + golden cookies)
+#   easter     -> easterEggs (RNG off golden cookies; the biggest set, ~20)
+#   christmas  -> reindeerDrops (RNG off popping reindeer) + Santa leveling
+# Feature-detected: a missing array just yields an empty list for that season.
+_SEASON_DROPS_JS = """
+function dropNames(arr) {
+    var o = [];
+    if (arr) for (var i = 0; i < arr.length; i++) {
+        var e = arr[i];
+        if (typeof e === 'string') o.push(e);
+        else if (e && e.name) o.push(e.name);
+    }
+    return o;
+}
+var DROPS = {
+    christmas: dropNames(Game.reindeerDrops),
+    halloween: dropNames(Game.halloweenDrops),
+    easter: dropNames(Game.easterEggs),
+    valentines: dropNames(Game.heartDrops)
+};
+"""
+
+# In the CURRENT season: buy every available collectible (cheapest first, keeping
+# the reserve) and level Santa during Christmas; then report per-season owned /
+# total / still-buyable so Python can drive the dwell + switch policy.
+# args: reserveSeconds. Returns {ok, hasSwitcher, season, santaLevel, santaMax,
+# bought, santa, counts:{season:{owned,total,buyable}}, dropLens:{season:n}}.
+SEASON_COLLECT = ("""
 var reserveSeconds = arguments[0] || 0;
-var cycle = arguments[1] || [];
-var out = {ok: false, action: '', season: '', bought: 0, santa: 0, santaLevel: -1};
+var out = {ok: false, hasSwitcher: false, season: '', santaLevel: -1, santaMax: 0,
+           bought: 0, santa: 0, counts: {}, dropLens: {}};
 if (typeof Game === 'undefined' || !Game.ready) return out;
 out.season = Game.season || '';
-if (!Game.Has || !Game.Has('Season switcher')) { out.action = 'no-switcher'; return out; }
-
+out.hasSwitcher = !!(Game.Has && Game.Has('Season switcher'));
 var reserve = (Game.cookiesPs || 0) * reserveSeconds;
-var BISCUIT = {
-    christmas: 'Festive biscuit', halloween: 'Ghostly biscuit',
-    valentines: 'Lovesick biscuit', easter: 'Bunny biscuit', fools: "Fool's biscuit"
-};
-var cur = Game.season || '';
-
-// The season-switch biscuits are pool 'switch' OR 'toggle' depending on build —
-// never auto-buy or count them; we toggle seasons by name explicitly below.
-function isSwitch(u) { return u.pool === 'switch' || u.pool === 'toggle'; }
-// owned/total seasonal upgrades per season (the switch biscuits don't count).
-function counts() {
-    var c = {};
-    for (var k in Game.Upgrades) {
-        var u = Game.Upgrades[k];
-        if (!u.season || isSwitch(u)) continue;
-        if (!c[u.season]) c[u.season] = {owned: 0, total: 0};
-        c[u.season].total++;
-        if (u.bought) c[u.season].owned++;
+""" + _SEASON_DROPS_JS + """
+function tally(names) {
+    var owned = 0, buyable = 0;
+    for (var i = 0; i < names.length; i++) {
+        var u = Game.Upgrades[names[i]];
+        if (!u) continue;
+        if (u.bought) owned++;
+        else if (u.unlocked) buyable++;
     }
-    return c;
+    return {owned: owned, total: names.length, buyable: buyable};
 }
-var santaMax = Game.santaLevels ? Game.santaLevels.length - 1 : 14;
-function complete(season) {
-    var c = counts()[season];
-    if (!c || c.total === 0) return true;
-    if (c.owned < c.total) return false;
-    if (season === 'christmas' && typeof Game.santaLevel === 'number'
-        && Game.santaLevel < santaMax) return false;
-    return true;
-}
+for (var s in DROPS) { out.counts[s] = tally(DROPS[s]); out.dropLens[s] = DROPS[s].length; }
 
-// 1) Grab the current season's available upgrades, cheapest first, keeping reserve.
-if (cur && BISCUIT[cur]) {
+out.santaMax = Game.santaLevels ? Game.santaLevels.length - 1 : 14;
+out.santaLevel = (typeof Game.santaLevel === 'number') ? Game.santaLevel : -1;
+
+var cur = out.season;
+// Buy the current season's available collectibles, cheapest first, keep reserve.
+if (cur && DROPS[cur]) {
     var avail = [];
-    for (var k in Game.Upgrades) {
-        var u = Game.Upgrades[k];
-        if (u.season !== cur || isSwitch(u)) continue;
-        if (u.bought || !u.unlocked) continue;
-        avail.push(u);
+    for (var i = 0; i < DROPS[cur].length; i++) {
+        var u = Game.Upgrades[DROPS[cur][i]];
+        if (u && u.unlocked && !u.bought) avail.push(u);
     }
     avail.sort(function(a, b) { return a.getPrice() - b.getPrice(); });
     for (var i = 0; i < avail.length; i++) {
@@ -913,42 +922,46 @@ if (cur && BISCUIT[cur]) {
         out.bought++;
     }
 }
-
-// 2) Christmas: level Santa while affordable and not maxed.
+// Christmas: level Santa (unlocks the Santa upgrade chain for the normal buyer).
 if (cur === 'christmas' && typeof Game.santaLevel === 'number'
     && typeof Game.UpgradeSanta === 'function') {
     var guard = 0;
-    while (Game.santaLevel < santaMax && guard < 20) {
-        // Honor the reserve when we know the price; otherwise let UpgradeSanta's
-        // own affordability check decide (santaPrice can be undefined on some builds).
+    while (Game.santaLevel < out.santaMax && guard < 30) {
         var sp = Game.santaPrice;
         if (typeof sp === 'number' && isFinite(sp) && (Game.cookies - sp) < reserve) break;
         var before = Game.santaLevel;
         Game.UpgradeSanta();
-        if (Game.santaLevel === before) break;   // couldn't afford / maxed
+        if (Game.santaLevel === before) break;
         out.santa++; guard++;
     }
     out.santaLevel = Game.santaLevel;
 }
-
-// 3) If the current season is done (or none active), switch to the next
-//    incomplete season we can afford. Biscuits are toggles, so don't gate on
-//    .bought — just that the target isn't the current season.
-if (!cur || complete(cur)) {
-    for (var j = 0; j < cycle.length; j++) {
-        var s = cycle[j];
-        if (s === cur || complete(s)) continue;
-        var biscuit = Game.Upgrades[BISCUIT[s]];
-        if (!biscuit || !biscuit.unlocked) continue;
-        if ((Game.cookies - biscuit.getPrice()) < reserve) continue;
-        biscuit.buy(1);
-        out.action = 'switch:' + s;
-        out.season = Game.season || s;
-        out.ok = true;
-        return out;
-    }
-}
 out.ok = true;
+return out;
+""")
+
+# Enter a season by toggling its switch biscuit (respecting the reserve). Returns
+# {ok, season, reason}. reason: '' on success, else 'no-switcher' / 'unknown-season'
+# / 'biscuit-locked' / 'reserve' / 'no-effect'.
+ENTER_SEASON = """
+var name = arguments[0];
+var reserveSeconds = arguments[1] || 0;
+var out = {ok: false, season: (typeof Game !== 'undefined' ? Game.season : ''), reason: ''};
+if (typeof Game === 'undefined' || !Game.ready) { out.reason = 'not-ready'; return out; }
+if (!Game.Has || !Game.Has('Season switcher')) { out.reason = 'no-switcher'; return out; }
+var BISCUIT = {christmas: 'Festive biscuit', halloween: 'Ghostly biscuit',
+               valentines: 'Lovesick biscuit', easter: 'Bunny biscuit'};
+var bn = BISCUIT[name];
+if (!bn) { out.reason = 'unknown-season'; return out; }
+var b = Game.Upgrades[bn];
+if (!b || !b.unlocked) { out.reason = 'biscuit-locked'; return out; }
+var reserve = (Game.cookiesPs || 0) * reserveSeconds;
+var p = (typeof b.getPrice === 'function') ? b.getPrice() : 0;
+if (Game.cookies - p < reserve) { out.reason = 'reserve'; return out; }
+b.buy(1);
+out.season = Game.season;
+out.ok = (Game.season === name);
+if (!out.ok) out.reason = 'no-effect';
 return out;
 """
 
@@ -1006,6 +1019,29 @@ try {
                    inStore: (Game.UpgradesInStore || []).indexOf(u) >= 0});
     }
     d.festiveUpgrades = fest;
+    // The per-season drop arrays the new season logic relies on. Report each
+    // array's length + how many we already own, so we can confirm the names and
+    // see remaining collectibles per season.
+    function arrInfo(arr) {
+        if (!arr) return null;
+        var names = [], owned = 0;
+        for (var i = 0; i < arr.length; i++) {
+            var e = arr[i];
+            var nm = (typeof e === 'string') ? e : (e && e.name);
+            if (!nm) continue;
+            names.push(nm);
+            var u = Game.Upgrades[nm];
+            if (u && u.bought) owned++;
+        }
+        return {len: names.length, owned: owned, sample: names.slice(0, 3)};
+    }
+    d.dropArrays = {
+        reindeerDrops: arrInfo(Game.reindeerDrops),
+        halloweenDrops: arrInfo(Game.halloweenDrops),
+        easterEggs: arrInfo(Game.easterEggs),
+        heartDrops: arrInfo(Game.heartDrops),
+        santaDrops: arrInfo(Game.santaDrops)
+    };
 } catch (e) { d.seasonErr = '' + e; }
 return d;
 """

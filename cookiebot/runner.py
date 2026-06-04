@@ -117,6 +117,10 @@ class CookieBot:
         self._aura_pending_logged = False
         self._aura_warn_logged = False
         self._season_logged = False
+        # Season dwell tracking for the stall-escape policy.
+        self._season_cur: str | None = None
+        self._season_last_owned = 0
+        self._season_progress_at = 0.0
         self._sell_mode_logged = False
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
@@ -803,32 +807,78 @@ class CookieBot:
                              "Krumblor trains up", ", ".join(res["pending"]), res.get("dragonLevel"))
                     self._aura_pending_logged = True
 
-    # Seasons cycled in priority order; 'fools' (Business Day) is skipped — it has
-    # no CpS upgrades to collect.
-    _SEASON_CYCLE = ["christmas", "halloween", "valentines", "easter"]
+    # Visit priority: fastest-to-complete / most-deterministic first. Valentine's
+    # is 7 store buys (instant); Christmas is instant Santa + RNG reindeer; then the
+    # RNG-only seasons, Easter (~20 eggs) last. 'fools' is skipped (no CpS upgrades).
+    _SEASON_ORDER = ["valentines", "christmas", "halloween", "easter"]
+
+    def _season_complete(self, season: str, counts: dict, santa_level: int, santa_max: int) -> bool:
+        """A season is done when every collectible in its drop array is owned —
+        plus, for Christmas, Santa is maxed. Unknown season (empty array) → treated
+        done so a missing game array can't wedge the cycle."""
+        c = counts.get(season)
+        if not c or c.get("total", 0) == 0:
+            return True
+        if c.get("owned", 0) < c.get("total", 0):
+            return False
+        if season == "christmas" and 0 <= santa_level < santa_max:
+            return False
+        return True
 
     def season_tick(self) -> None:
         reserve_seconds = self.cfg.lucky_reserve_seconds if self.golden_count == 3 else 0.0
-        res = self.driver.execute_script(
-            scripts.SEASON_TICK, reserve_seconds, self._SEASON_CYCLE
-        ) or {}
-        if res.get("action") == "no-switcher":
+        res = self.driver.execute_script(scripts.SEASON_COLLECT, reserve_seconds) or {}
+        if not res.get("hasSwitcher"):
             if not self._season_logged:
                 log.info("auto-seasons on, but the 'Season switcher' heavenly upgrade "
                          "isn't owned yet — seasons can't be forced, skipping")
                 self._season_logged = True
             return
+
+        cur = res.get("season", "")
+        counts = res.get("counts", {})
+        santa_level = int(res.get("santaLevel", -1))
+        santa_max = int(res.get("santaMax", 0))
         if res.get("santa"):
-            log.info("Santa leveled +%d (now level %s)", res["santa"], res.get("santaLevel"))
+            log.info("Santa leveled +%d (now %s/%s)", res["santa"], santa_level, santa_max)
         if res.get("bought"):
-            self._status.update(
-                last_action=f"season {res.get('season')}: +{res['bought']} upgrades"
-            )
-        action = res.get("action", "")
-        if action.startswith("switch:"):
-            season = action.split(":", 1)[1]
-            log.info("entered season: %s", season)
-            self._status.update(last_action=f"season → {season}")
+            log.info("season %s: collected %d upgrade(s)", cur, res["bought"])
+            self._status.update(last_action=f"season {cur}: +{res['bought']}")
+
+        # Progress tracking for the dwell-cap stall escape.
+        owned_total = sum(int(c.get("owned", 0)) for c in counts.values())
+        now = time.monotonic()
+        if cur != self._season_cur:
+            self._season_cur = cur
+            self._season_last_owned = owned_total
+            self._season_progress_at = now
+        elif owned_total > self._season_last_owned:
+            self._season_last_owned = owned_total
+            self._season_progress_at = now
+
+        def done(s: str) -> bool:
+            return self._season_complete(s, counts, santa_level, santa_max)
+
+        incomplete = [s for s in self._SEASON_ORDER if not done(s)]
+        target = None
+        if not cur or done(cur):
+            # Current season fully collected → move to the next incomplete one.
+            target = incomplete[0] if incomplete else None
+        elif (now - self._season_progress_at) > self.cfg.season_max_dwell_s:
+            # Stalled on RNG with nothing new dropping → make progress elsewhere.
+            others = [s for s in incomplete if s != cur]
+            if others:
+                target = others[0]
+                log.info("season %s stalled (no new drops in %.0fs) — moving on to %s",
+                         cur, self.cfg.season_max_dwell_s, target)
+
+        if target and target != cur:
+            ent = self.driver.execute_script(scripts.ENTER_SEASON, target, reserve_seconds) or {}
+            if ent.get("ok"):
+                log.info("entered season: %s", target)
+                self._status.update(last_action=f"season → {target}")
+            elif ent.get("reason") and ent.get("reason") != "reserve" and not self._season_logged:
+                log.info("couldn't enter %s: %s", target, ent.get("reason"))
 
     def ascend_tick(self) -> None:
         info = self.driver.execute_script(scripts.ASCEND_INFO)

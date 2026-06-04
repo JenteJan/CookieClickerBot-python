@@ -126,6 +126,7 @@ PROFILE_FIELDS = (
     "dragon_aura_combo",
     "auto_seasons",
     "season_period_s",
+    "season_max_dwell_s",
     "disable_rendering",
     "purchase_period_s",
     "auto_garden",
@@ -289,6 +290,12 @@ class Config:
     # reserve as normal buys.
     auto_seasons: bool = False
     season_period_s: float = 15.0
+    # A season is normally held until every one of its collectibles is obtained
+    # (instant for Valentine's hearts, RNG for Halloween/Easter/Christmas drops),
+    # so we don't pay the switch-biscuit cost re-entering. This is a safety escape:
+    # if no new collectible has dropped in this many seconds AND another season is
+    # still incomplete, move on to make progress there (and cycle back later).
+    season_max_dwell_s: float = 1800.0
     # Garden minigame player. Off by default — when off, the bot keeps its old
     # behavior (clover-spam every empty plot). When on, it runs a two-phase
     # player: first BREED the seed log up to the chosen strategy's plants
