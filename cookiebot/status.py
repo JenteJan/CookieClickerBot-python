@@ -74,6 +74,15 @@ class BotStatus:
     heavenly_chips: float = 0.0
     heavenly_owned: int = 0
     heavenly_total: int = 0
+    # Golden-cookie combo state: live CpS multiplier, active buff count, Grimoire magic.
+    combo_mult: float = 1.0
+    combo_buffs: int = 0
+    magic: float | None = None
+    magic_max: float | None = None
+    combo_buff_names: List[str] = field(default_factory=list)
+    # Click buffs (Dragonflight / Click frenzy) — multiply click power, not CpS.
+    click_mult: float = 1.0
+    click_buffs: List[str] = field(default_factory=list)
 
     def update(self, **kwargs) -> None:
         for k, v in kwargs.items():
@@ -204,6 +213,19 @@ def render(status: BotStatus) -> Panel:
     if status.heavenly_total:
         chips = f"{format_number(status.heavenly_chips)} chips" if status.heavenly_chips else "0 chips"
         grid.add_row("heavenly", f"{status.heavenly_owned}/{status.heavenly_total} upgrades · {chips}")
+    if status.magic is not None or status.combo_mult > 1.01 or status.click_mult > 1.01:
+        mult = f"[bold green]×{status.combo_mult:.1f}[/]" if status.combo_mult > 1.01 else "×1"
+        if status.combo_buff_names:
+            names = ", ".join(status.combo_buff_names)
+            parts = [f"{mult} CpS ({names})"]
+        else:
+            parts = [f"{mult} CpS"]
+        if status.click_mult > 1.01:
+            label = ", ".join(status.click_buffs) or "click"
+            parts.append(f"[bold magenta]×{status.click_mult:.0f} click ({label})[/]")
+        if status.magic is not None:
+            parts.append(f"magic {format_number(status.magic)}/{format_number(status.magic_max or 0)}")
+        grid.add_row("combo", " · ".join(parts))
 
     body = Group(grid, Text(), Text.from_markup(_HOTKEY_HINT, justify="center"))
     return Panel(body, title="Cookie Clicker Bot", border_style="yellow", expand=False)

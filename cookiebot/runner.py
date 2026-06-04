@@ -125,6 +125,11 @@ class CookieBot:
         # Idle-reason logging: distinguish "banking" from an actual stall.
         self._last_buy_at = 0.0
         self._last_idle_log_at = 0.0
+        # Combo (FtHoF) observability throttles. -inf so the first event always logs.
+        self._combo_warn_at = float("-inf")
+        self._combo_nogrimoire_logged = False
+        self._click_buff_on = False
+        self._cps_combo_on = False
         self._sell_mode_logged = False
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
@@ -395,11 +400,19 @@ class CookieBot:
         # one shot). Otherwise drain every worthwhile building/upgrade affordable
         # right now in a single batched call — one item in steady state, the whole
         # post-ascension shopping list during catch-up.
-        if best_bundle is not None and best_bundle_score >= max(
-            building_best_score, best_upgrade[1], min_score
+        acted = False
+        if (
+            best_bundle is not None
+            and best_bundle_score >= max(building_best_score, best_upgrade[1], min_score)
+            and self._affordable_with_reserve(cookies, cookies_ps, float(best_bundle["cost"]))
         ):
+            # The bundle is the best move AND affordable — take it (N buildings +
+            # the tier upgrade at once).
             acted = self._maybe_buy_bundle(best_bundle, cookies, cookies_ps)
-        else:
+        if not acted:
+            # No bundle, or it's unaffordable -> drain: buy the best AFFORDABLE
+            # single (or bank per the dynamic horizon). This is what stops the bot
+            # idling on an unaffordable bundle while affordable buildings sit there.
             acted = bool(self._buy_drain(
                 cookies, cookies_ps, buildings, scored_upgrades,
                 store_prices, building_score, min_score,
@@ -414,26 +427,31 @@ class CookieBot:
             self._last_buy_at = now
         elif now - self._last_idle_log_at >= 15.0 and now - self._last_buy_at >= 10.0:
             self._last_idle_log_at = now
-            self._note_idle(cookies, cookies_ps, building_best_score,
-                            best_building, best_upgrade, store_prices, reserve_target)
+            self._note_idle(cookies, cookies_ps, buildings, scored_upgrades,
+                            store_prices, reserve_target)
 
-    def _note_idle(self, cookies, cookies_ps, building_best_score, best_building,
-                   best_upgrade, store_prices, reserve_target_s) -> None:
-        """Log why nothing was bought this tick (banking vs. nothing-worthwhile)."""
-        uid, uscore = best_upgrade
-        if uscore > building_best_score and uid is not None:
-            name, price = self.upgrades_by_id[uid].name, store_prices.get(uid, 0.0)
-        else:
-            name, price = best_building.name, best_building.price
+    def _note_idle(self, cookies, cookies_ps, buildings, scored_upgrades,
+                   store_prices, reserve_target_s) -> None:
+        """Log what the bot is actually waiting on. We report the SOONEST worthwhile
+        buy (the cheapest item) — not the highest-scored one, which may be hours
+        away and made the log read like a multi-hour stall when the bot is really
+        about to buy a cheap building shortly."""
+        cands = [(b.price, b.name) for b in buildings if b.price > 0]
+        cands += [(store_prices.get(uid, float("inf")), self.upgrades_by_id[uid].name)
+                  for uid, _ in scored_upgrades]
+        cands = [(p, n) for p, n in cands if p > 0 and p != float("inf")]
+        if not cands:
+            return
+        price, name = min(cands)
         reserve_cookies = cookies_ps * reserve_target_s
         short = max(0.0, price + reserve_cookies - cookies)
         eta = short / cookies_ps if cookies_ps > 0 else float("inf")
         if short > 0:
-            log.info("banking for %s: %.2e cookies short (~%.0fs at current CpS%s)",
-                     name, short, eta,
+            log.info("banking: next buy %s in ~%.0fs (%.2e short, cps %.2e%s)",
+                     name, eta, short, cookies_ps,
                      f", reserve {reserve_target_s:g}s" if reserve_target_s else "")
         else:
-            log.info("idle: best buy %s is affordable but scored below threshold "
+            log.info("idle: cheapest buy %s affordable but not bought — possible stall "
                      "(have %.2e, cps %.2e)", name, cookies, cookies_ps)
 
     def _buy_drain(
@@ -685,7 +703,56 @@ class CookieBot:
         return True
 
     def lucky_tick(self) -> None:
-        self.driver.execute_script(scripts.GET_LUCKY)
+        res = self.driver.execute_script(scripts.GET_LUCKY) or {}
+        # Surface the live combo state so it's verifiable from the log/panel.
+        click_mult = float(res.get("clickMult", 1.0))
+        click_buffs = res.get("clickBuffs") or []
+        cps_buffs = res.get("cpsBuffs") or []
+        mult = float(res.get("mult", 1.0))
+        self._status.update(
+            combo_mult=mult,
+            combo_buffs=int(res.get("n", 0)),
+            combo_buff_names=cps_buffs,
+            magic=res.get("magic"),
+            magic_max=res.get("magicM"),
+            click_mult=click_mult,
+            click_buffs=click_buffs,
+        )
+        # Log a CpS combo when it lands (mult jumps), naming the buffs — so the
+        # building-special / Dragon-Harvest boosts are visible, and it doubles as
+        # proof the golden-cookie combo engine is actually firing.
+        if mult >= 2.0 and not self._cps_combo_on:
+            self._cps_combo_on = True
+            log.info("COMBO ACTIVE: ×%.0f CpS — %s", mult, ", ".join(cps_buffs) or "buffs")
+        elif mult < 1.5:
+            self._cps_combo_on = False
+        # Log a click buff (Dragonflight / Click frenzy) when it appears — the
+        # autoclicker is cashing in on it even though it's not a CpS multiplier.
+        if click_mult > 1.0 and not self._click_buff_on:
+            self._click_buff_on = True
+            log.info("CLICK BUFF: %s (×%.0f click) — autoclicker capitalizing",
+                     ", ".join(click_buffs) or "active", click_mult)
+        elif click_mult <= 1.0:
+            self._click_buff_on = False
+        n, mult = int(res.get("n", 0)), float(res.get("mult", 1.0))
+        magic, magic_m = res.get("magic") or 0, res.get("magicM") or 0
+        if res.get("cast"):
+            log.info("COMBO: cast FtHoF on %d-buff stack (×%.1f CpS, magic %.0f/%.0f, %d on screen)",
+                     n, mult, magic, magic_m, int(res.get("goldens", 0)))
+            self._status.update(last_action=f"FtHoF combo ×{mult:.0f}")
+            self._combo_warn_at = 0.0
+        elif n >= 2 and res.get("hasGrimoire"):
+            # Buff stack present but no cast — almost always not enough magic.
+            now = time.monotonic()
+            if now - self._combo_warn_at >= 20.0:
+                self._combo_warn_at = now
+                log.info("COMBO: %d-buff stack (×%.1f) but FtHoF NOT cast — magic %.0f/%.0f, "
+                         "cost %.0f (low magic / regen-limited)", n, mult, magic, magic_m,
+                         res.get("ftofCost") or 0)
+        elif n >= 2 and not res.get("hasGrimoire") and not self._combo_nogrimoire_logged:
+            log.info("COMBO: %d-buff stack but the Grimoire (Wizard tower minigame) isn't "
+                     "unlocked yet — no FtHoF until it is", n)
+            self._combo_nogrimoire_logged = True
 
     def achievement_threshold_tick(self) -> None:
         # Click the ticker only when it's genuinely useful: a fortune is showing,

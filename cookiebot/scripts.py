@@ -558,38 +558,68 @@ var FRENZY_BUFFS = [
     "Fervent adoration","Golden ages","Manabloom","Deduplication"
 ];
 
-function activeFrenzyBuffs(extraNames) {
+function buffNames(extraNames) {
     var names = FRENZY_BUFFS.concat(extraNames || []);
     var hits = [];
     for (var n = 0; n < names.length; n++) {
-        if (Game.buffs[names[n]]) hits.push(Game.buffs[names[n]]);
+        if (Game.buffs[names[n]]) hits.push(names[n]);
     }
     return hits;
 }
 
-if (activeFrenzyBuffs().length >= 2) {
-    var wiz = Game.ObjectsById[7].minigame;
-    if (wiz) {
-        wiz.castSpell(wiz.spellsById[1]);
-        setTimeout(function() {
-            if (activeFrenzyBuffs(["Click frenzy", "Dragonflight"]).length >= 3) {
-                Game.ObjectsById[7].sell(400);
-                var bank = Game.ObjectsById[5].minigame;
-                if (bank) {
-                    // takeLoan() does NOT check the unlock gate — calling it on a
-                    // locked loan still spends the 20-50%-of-bank downpayment. Gate
-                    // on office level using the game's own thresholds (loan 1 > 1,
-                    // loan 2 > 3). Loan 3 is skipped on purpose: +20% for 2 days
-                    // then -20% for 5 days is the opposite of a burst. takeLoan
-                    // already no-ops a loan that's currently active.
-                    if (bank.officeLevel > 1) bank.takeLoan(1);
-                    if (bank.officeLevel > 3) bank.takeLoan(2);
+// Instrumented so the cast is observable from the bot log: report the active
+// buffs, the live CpS multiplier (buffed/unbuffed), the Grimoire magic vs. FtHoF
+// cost, and whether the cast ACTUALLY landed (castSpell returns false on low magic).
+var out = {hasGrimoire: false, n: 0, buffs: [], magic: null, magicM: null,
+           ftofCost: null, cast: false, mult: 1, goldens: 0};
+out.buffs = buffNames();
+out.n = out.buffs.length;
+if (Game.unbuffedCps > 0) out.mult = Game.cookiesPs / Game.unbuffedCps;
+out.goldens = Game.shimmers ? Game.shimmers.length : 0;
+// Click buffs (Dragonflight, Click frenzy, Cursed finger, …) multiply CLICK
+// power, not CpS — so they never show up in out.mult above. Surface them so the
+// autoclicker's payoff is visible.
+out.clickMult = 1; out.clickBuffs = []; out.cpsBuffs = [];
+for (var bn in Game.buffs) {
+    var bf = Game.buffs[bn];
+    if (!bf) continue;
+    if (bf.multClick && bf.multClick > 1) { out.clickMult *= bf.multClick; out.clickBuffs.push(bn); }
+    // Every CpS-boosting buff by name: Frenzy, Dragon harvest, Elder frenzy, and
+    // the per-building specials (Brainstorm, Ore vein, Refactoring, …). The fixed
+    // FRENZY_BUFFS list above misses some of these; this catches them all.
+    if (bf.multCpS && bf.multCpS > 1) out.cpsBuffs.push(bn);
+}
+var wiz = Game.ObjectsById[7] ? Game.ObjectsById[7].minigame : null;
+out.hasGrimoire = !!wiz;
+if (wiz) {
+    out.magic = wiz.magic;
+    out.magicM = wiz.magicM;
+    var spell = wiz.spellsById[1];
+    if (spell) out.ftofCost = (spell.costMin || 0) + (spell.costPercent || 0) * wiz.magicM;
+    if (out.n >= 2 && spell) {
+        out.cast = !!wiz.castSpell(spell);
+        if (out.cast) {
+            setTimeout(function() {
+                if (buffNames(["Click frenzy", "Dragonflight"]).length >= 3) {
+                    Game.ObjectsById[7].sell(400);
+                    var bank = Game.ObjectsById[5].minigame;
+                    if (bank) {
+                        // takeLoan() does NOT check the unlock gate — calling it on a
+                        // locked loan still spends the 20-50%-of-bank downpayment. Gate
+                        // on office level using the game's own thresholds (loan 1 > 1,
+                        // loan 2 > 3). Loan 3 is skipped on purpose: +20% for 2 days
+                        // then -20% for 5 days is the opposite of a burst. takeLoan
+                        // already no-ops a loan that's currently active.
+                        if (bank.officeLevel > 1) bank.takeLoan(1);
+                        if (bank.officeLevel > 3) bank.takeLoan(2);
+                    }
+                    wiz.castSpell(wiz.spellsById[1]);
                 }
-                wiz.castSpell(wiz.spellsById[1]);
-            }
-        }, 1000);
+            }, 1000);
+        }
     }
 }
+return out;
 """
 
 FARM_SUGAR_LUMPS = """
