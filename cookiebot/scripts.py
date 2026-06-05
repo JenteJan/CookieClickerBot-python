@@ -499,11 +499,19 @@ for (var y = 0; y < 6; y++) {
         if (!M.isTileUnlocked(x, y)) continue;
         var t;
         try { t = M.getTile(x, y); } catch (e) { continue; }
-        var id = t[0], age = t[1];
-        var pl = id ? M.plantsById[id] : null;
+        // CRITICAL: a tile stores the plant id PLUS ONE (0 = empty), so the real
+        // plant is M.plantsById[rawId - 1] — matching the game's own harvest code
+        // (`me=M.plantsById[tile[0]-1]`). Reading M.plantsById[rawId] was off by
+        // one: we read the NEXT plant's maturity (e.g. 20 instead of Baker's
+        // wheat's 35) and harvested parents before they matured, so the game never
+        // unlocked the seed. `id` stays the raw (1-based, 0=empty) value so the
+        // occupied check `id != 0` still holds.
+        var rawId = t[0], age = t[1];
+        var pl = rawId >= 1 ? M.plantsById[rawId - 1] : null;
         var matureAge = pl ? pl.mature : 0;
-        tiles.push({x: x, y: y, id: id, age: age, matureAge: matureAge,
-                    key: pl ? pl.key : null, mature: id !== 0 && age >= matureAge});
+        tiles.push({x: x, y: y, id: rawId, age: age, matureAge: matureAge,
+                    key: pl ? pl.key : null, unlocked: pl ? !!pl.unlocked : false,
+                    mature: rawId !== 0 && age >= matureAge});
     }
 }
 return {

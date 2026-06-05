@@ -167,9 +167,10 @@ def _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
         even = (x + y) % 2 == 0
         if tid != 0:
             if t["mature"]:
-                cur = plants_by_id.get(tid, {})
-                cur_key = cur.get("key")
-                cur_locked = cur_key is not None and not cur.get("unlocked", True)
+                # Use the tile's OWN resolved fields (the snapshot looks the plant
+                # up at the correct id-1); plants_by_id keyed by the tile's raw id
+                # would be off by one.
+                cur_locked = not t.get("unlocked", True)
                 if even:
                     # Parent tiles are the mutation ENGINE: a mature plant here
                     # seeds the adjacent empty mutation tiles every tick it stays
@@ -219,7 +220,7 @@ def _steady(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
 
     for t in tiles:
         x, y, tid = t["x"], t["y"], t["id"]
-        cur_key = plants_by_id[tid]["key"] if tid in plants_by_id else None
+        cur_key = t.get("key")  # resolved correctly in the snapshot (id-1)
         want = _desired_key(x, y, strategy)
 
         if want is None:
