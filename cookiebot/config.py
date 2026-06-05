@@ -114,6 +114,7 @@ PROFILE_FIELDS = (
     "auto_pop_wrinklers_in_frenzy",
     "wrinkler_strategy",
     "auto_pledge",
+    "pop_wrath",
     "payback_mode",
     "payback_cap_minutes",
     "bulk_buy",
@@ -123,6 +124,7 @@ PROFILE_FIELDS = (
     "combo_log",
     "auto_ascend",
     "auto_ascend_gain_pct",
+    "auto_ascend_min_chips",
     "auto_train_dragon",
     "dragon_keep_buildings",
     "dragon_sacrifice_bank_fraction",
@@ -225,25 +227,36 @@ class Config:
     # the cookies it DIGESTED over its lifespan, independent of CpS at pop time, so
     # popping during a buff gives no bonus.
     auto_pop_wrinklers_in_frenzy: bool = False
-    # Wrinkler tactic. Each wrinkler eats ~5% of CpS (≈50-70% total at max slots)
-    # and stores it, paying back 1.1x (3.3x shiny) of the total digested when
-    # popped — so you MUST pop to realise the value and reinvest it (popping is
-    # net positive; the Frenzy timing is irrelevant). Strategies:
-    #   "hold"          - never auto-pop; you pop manually with 'w'
-    #   "pop-when-full" - pop all once every slot is filled (reclaim + reinvest +
-    #                     cycle slots to roll the 0.01% shiny). Default.
-    #   "always"        - pop as soon as any wrinkler has eaten (max cycling)
+    # Wrinkler tactic. Each wrinkler eats ~5% of CpS and stores it, paying back
+    # 1.1x (3.3x shiny) of the total digested when popped — so HOLDING them is a
+    # net +5–11% on total income (you just realise it later as a lump). Popping
+    # mid-run throws that edge away, and since the payout is based on what was
+    # digested (not CpS at pop time) there's no Frenzy-timing benefit either.
+    # Optimal play is therefore "hold" and only realise the value when it counts.
+    # Strategies:
+    #   "hold"          - DEFAULT, optimal. Never auto-pop during normal play; you
+    #                     pop manually with 'w'.
+    #   "pop-when-full" - (opt-in) pop all once every slot is filled — cycles slots
+    #                     to roll the 0.01% shiny, but forfeits the held +edge.
+    #   "always"        - (opt-in) pop as soon as any wrinkler has eaten.
     # Regardless of strategy the bot ALWAYS pops everything right before an
     # auto-ascend (un-popped wrinkler cookies are otherwise lost from the prestige
-    # total) and pops aggressively while in the Halloween season (each pop can drop
-    # a spooky-cookie upgrade).
-    wrinkler_strategy: str = "pop-when-full"
+    # total), and pops during Halloween ONLY while the 7 spooky-cookie drops are
+    # still incomplete (each pop can drop one); once they're all owned it holds.
+    wrinkler_strategy: str = "hold"
     # Auto-buy "Elder Pledge" to CALM the Grandmapocalypse. OFF by default: the
     # Grandmapocalypse is what spawns wrinklers (the 1.1x/3.3x cookie engine above)
     # and the Halloween spooky-cookie drops, so repeatedly calming it suppresses
     # exactly what the wrinkler strategy is farming. Turn on only if you'd rather
     # keep golden cookies clean (no wrath cookies) at the cost of all wrinkler value.
     auto_pledge: bool = False
+    # Auto-pop WRATH cookies (the red golden cookies during the Grandmapocalypse).
+    # On by default — they roll the same effects as golden plus the wrath-only
+    # Elder Frenzy (×666 CpS), so on average they're positive. Turn OFF to let them
+    # expire unpopped, avoiding their Clot (×0.5 CpS) / Ruin downsides (the cause of
+    # sudden CpS drops) at the cost of forgoing Elder Frenzy. Golden cookies and
+    # reindeer are always popped; this only gates the wrath ones.
+    pop_wrath: bool = True
     # Experimental payback-time purchase mode (guide §18.3). vs the default
     # value/cost heuristic it adds: (1) the achievement-milk bonus to building
     # buys that cross a count threshold (the default mode only credits upgrades),
@@ -294,6 +307,10 @@ class Config:
     # auto_ascend_gain_pct (relative to current). Heavenly chips persist unspent.
     auto_ascend: bool = False
     auto_ascend_gain_pct: float = 10.0
+    # Absolute floor: never auto-ascend for fewer than this many NEW heavenly chips.
+    # Stops the catastrophic "first ascension at +1 chip" (a full reset for almost
+    # nothing) — the first ascension only happens once the gain clears this bar.
+    auto_ascend_min_chips: float = 100.0
     # Krumblor dragon training. Off by default. Middle dragon levels permanently
     # SACRIFICE 100 of a building; the guard only allows such a level when that
     # building's count stays ≥ dragon_keep_buildings after the sacrifice.

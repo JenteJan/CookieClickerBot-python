@@ -156,13 +156,24 @@ def _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
         x, y, tid = t["x"], t["y"], t["id"]
         even = (x + y) % 2 == 0
         if tid != 0:
-            # Harvest matured mutants to unlock their seed and free the tile:
-            # any mature plant on a mutation (odd) tile, or a stray mature
-            # non-parent on a parent (even) tile. Leave growing plants and our
-            # productive parents alone.
             if t["mature"]:
-                cur_key = plants_by_id.get(tid, {}).get("key")
-                if not even or cur_key not in parent_keys:
+                cur = plants_by_id.get(tid, {})
+                cur_key = cur.get("key")
+                cur_locked = cur_key is not None and not cur.get("unlocked", True)
+                is_parent = cur_key in parent_keys
+                if even:
+                    # Parent tiles hold our planted parents — clear only a stray
+                    # non-parent that wandered in.
+                    harvest = cur_key not in parent_keys
+                else:
+                    # Mutation tiles: harvest a STILL-LOCKED species (to capture the
+                    # unlock) or a dead-end mutant (to free the tile), but LEAVE an
+                    # already-unlocked plant that's a parent of a still-locked
+                    # species — it keeps rolling higher-tier mutations on its
+                    # neighbours. Harvesting it the instant it matures is the
+                    # "premature harvest" that stalls the climb up the tree.
+                    harvest = cur_locked or not is_parent
+                if harvest:
                     actions.append({"op": "harvest", "x": x, "y": y})
             continue
         if even:

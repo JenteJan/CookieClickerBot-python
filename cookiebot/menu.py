@@ -206,17 +206,21 @@ def _settings_entries() -> list:
         ("Lucky reserve", lambda c: f"{c.lucky_reserve_seconds / 60:g} min of CPS", _reserve_edit),
         ("Wrinkler strategy", lambda c: c.wrinkler_strategy,
          lambda c: setattr(c, "wrinkler_strategy", Prompt.ask(
-             "Wrinklers (hold = manual 'w'; pop-when-full = reclaim at max slots; "
-             "always = pop continuously). Pops before ascend + farms Halloween either way",
+             "Wrinklers (hold = optimal, +5-11% held; pop-when-full/always = opt-in "
+             "cycling, forfeits the edge). Always pops before ascend + farms incomplete Halloween drops",
              choices=["hold", "pop-when-full", "always"], default=c.wrinkler_strategy))),
         _bool_entry("Calm Grandmapocalypse (Elder Pledge)", "auto_pledge",
                     "Auto-buy Elder Pledge to calm the Grandmapocalypse? (suppresses wrinklers — usually leave off)"),
+        _bool_entry("Pop wrath cookies", "pop_wrath",
+                    "Auto-pop wrath (red) cookies too? On = +Elder Frenzy but risks Clot/Ruin CpS drops; off = let them expire"),
         _bool_entry("Payback purchase mode", "payback_mode", "Use experimental payback-time purchase mode?"),
         ("Payback cap", lambda c: f"{c.payback_cap_minutes:g} min" if c.payback_cap_minutes else "[dim]no cap[/dim]",
          lambda c: setattr(c, "payback_cap_minutes", max(0.0, FloatPrompt.ask("Skip buys slower to pay off than how many minutes? (0 = no cap)", default=c.payback_cap_minutes)))),
         _bool_entry("Auto-ascend", "auto_ascend", "Auto-ascend (soft reset) when worthwhile?"),
         ("Ascend gain %", lambda c: f"{c.auto_ascend_gain_pct:g}%",
          lambda c: setattr(c, "auto_ascend_gain_pct", max(0.0, FloatPrompt.ask("Ascend when prestige would grow by at least what %?", default=c.auto_ascend_gain_pct)))),
+        ("Ascend min chips", lambda c: f"{c.auto_ascend_min_chips:g}",
+         lambda c: setattr(c, "auto_ascend_min_chips", max(1.0, FloatPrompt.ask("Never auto-ascend for fewer than how many new heavenly chips?", default=c.auto_ascend_min_chips)))),
         _bool_entry("Auto-train Krumblor", "auto_train_dragon", "Auto-train Krumblor? (some levels sacrifice buildings)"),
         ("Dragon: keep buildings", lambda c: str(c.dragon_keep_buildings),
          lambda c: setattr(c, "dragon_keep_buildings", max(0, IntPrompt.ask("Keep at least how many of a building after a sacrifice?", default=c.dragon_keep_buildings)))),

@@ -70,19 +70,35 @@ if (window._autoClickCookie) clearInterval(window._autoClickCookie);
 window._autoClickCookie = setInterval(function() { Game.ClickCookie(); }, arguments[0]);
 """
 
-START_AUTOCLICK_GOLDEN = """
+# Pop the shimmers (golden cookies, reindeer). When window._botPopWrath === false,
+# SKIP wrath cookies (the red ones during the Grandmapocalypse) so their Clot/Ruin
+# effects can't fire — at the cost of also forgoing the wrath-only Elder Frenzy.
+# Reindeer have no .wrath property so they're always popped. (`pop()` removes the
+# shimmer, so iterate backwards over the current snapshot.)
+_POP_SHIMMERS_JS = """
+for (var _i = Game.shimmers.length - 1; _i >= 0; _i--) {
+    var _s = Game.shimmers[_i];
+    if (window._botPopWrath === false && _s.wrath) continue;
+    _s.pop();
+}
+"""
+
+START_AUTOCLICK_GOLDEN = ("""
 if (window._autoGolden) clearInterval(window._autoGolden);
 window._autoGolden = setInterval(function() {
-    while (Game.shimmers.length > 0) Game.shimmers[0].pop();
+""" + _POP_SHIMMERS_JS + """
 }, arguments[0]);
-"""
+""")
+
+# Set whether wrath cookies are auto-popped (default true if never set).
+SET_POP_WRATH = "window._botPopWrath = arguments[0];"
 
 # Gated auto-clicker start for A/B: both browsers share the OS wall clock, so
 # passing the same Date.now() deadline (arguments[2], ms epoch) makes both
 # instances actually begin clicking at the same instant — independent of when
 # Selenium delivers each command. Until the deadline the intervals run but
 # no-op. args: cookieMs, goldenMs, startAtMs.
-START_AUTOCLICK_GATED = """
+START_AUTOCLICK_GATED = ("""
 var cookieMs = arguments[0], goldenMs = arguments[1], startAt = arguments[2];
 window._abStartAt = startAt;
 if (window._autoClickCookie) clearInterval(window._autoClickCookie);
@@ -92,11 +108,11 @@ window._autoClickCookie = setInterval(function() {
 }, cookieMs);
 window._autoGolden = setInterval(function() {
     if (Date.now() >= window._abStartAt) {
-        while (Game.shimmers.length > 0) Game.shimmers[0].pop();
+""" + _POP_SHIMMERS_JS + """
     }
 }, goldenMs);
 return Date.now();
-"""
+""")
 
 # One round-trip snapshot of everything we evaluate per purchase tick.
 GAME_SNAPSHOT = """
@@ -602,7 +618,24 @@ if (wiz) {
     out.magicM = wiz.magicM;
     var spell = wiz.spellsById[1];
     if (spell) out.ftofCost = (spell.costMin || 0) + (spell.costPercent || 0) * wiz.magicM;
-    if (out.n >= 2 && spell) {
+    // When to cast Force the Hand of Fate (FtHoF):
+    //   (a) ESCALATE — an existing 2+ buff stack is already up (the original gate):
+    //       chain another golden onto it for the big multi-buff combo.
+    //   (b) OPEN — a single Frenzy (CpS multiplier ≥2) is up AND magic is near full.
+    //       This is the missing opener: random goldens almost never produce a
+    //       2-buff stack on their own, so without (b) the (a) gate could never be
+    //       reached and FtHoF was effectively never cast (magic sat pinned at max
+    //       all night). We bank magic to ~full and dump it the instant a Frenzy
+    //       lands, aiming for a Lucky / Click frenzy ON TOP of the Frenzy (a
+    //       Frenzy-boosted Lucky is the single biggest cookie windfall in the
+    //       game). Gating the opener on near-full magic self-throttles it to ~one
+    //       cast per magic-refill, so a 77s Frenzy fires a single cast rather than
+    //       a magic-draining spam of independent (and occasionally backfiring)
+    //       rolls. The escalation cast inside (a) still re-checks live state.
+    var frenzyActive = out.mult >= 2;
+    var magicReady = wiz.magic >= Math.max(out.ftofCost || 0, wiz.magicM * 0.6);
+    out.wantOpen = frenzyActive && magicReady;   // surfaced for logging
+    if (spell && (out.n >= 2 || out.wantOpen)) {
         var mb = wiz.magic;
         out.cast = !!wiz.castSpell(spell);
         ev({type: 'ftof', n: out.n, mult: out.mult, magicBefore: mb, magicAfter: wiz.magic,
@@ -1239,17 +1272,48 @@ return out;
 """
 
 ASCEND_INFO = """
+var buffed = false;
+for (var b in Game.buffs) {
+    var bf = Game.buffs[b];
+    if (bf && ((bf.multCpS && bf.multCpS > 1) || (bf.multClick && bf.multClick > 1))) { buffed = true; break; }
+}
 return {
     prestige: Game.prestige,
-    potential: Game.HowMuchPrestige(Game.cookiesReset + Game.cookiesEarned)
+    potential: Game.HowMuchPrestige(Game.cookiesReset + Game.cookiesEarned),
+    buffed: buffed,
+    shimmers: Game.shimmers ? Game.shimmers.length : 0
 };
 """
 
 # Force ascension (the 1 arg skips the confirm), then complete the rebirth a
 # moment later once the ascension screen has processed. Heavenly chips persist.
+# Ascend, then RETRY the reincarnation every second until we're actually off the
+# ascension screen (a single delayed Reincarnate() can no-op if the screen isn't
+# ready yet — that left the bot idling on the ascend screen for minutes). Bypasses
+# the confirm (arg 1) and closes any leftover prompt.
 DO_ASCEND = """
 Game.Ascend(1);
-setTimeout(function() { Game.Reincarnate(1); }, 1500);
+if (window._reincTimer) clearInterval(window._reincTimer);
+var tries = 0;
+window._reincTimer = setInterval(function() {
+    tries++;
+    if (Game.OnAscend) {
+        if (typeof Game.ClosePrompt === 'function') Game.ClosePrompt();
+        Game.Reincarnate(1);
+    }
+    if (!Game.OnAscend || tries >= 30) clearInterval(window._reincTimer);
+}, 1000);
+"""
+
+# Force-finish a reincarnation if we're still stuck on the ascension screen
+# (Python-side safety net, called from the ascend tick). Returns whether it acted.
+FINISH_ASCENSION = """
+if (typeof Game !== 'undefined' && Game.OnAscend) {
+    if (typeof Game.ClosePrompt === 'function') Game.ClosePrompt();
+    Game.Reincarnate(1);
+    return true;
+}
+return false;
 """
 
 GET_SAVE_DATA = "return Game.WriteSave(1);"
@@ -1284,9 +1348,20 @@ if (Game.wrinklers) {
 # (so we can farm spooky cookies during Halloween without depending on the season
 # tick). Pure read.
 WRINKLER_STATE = """
-var out = {count: 0, max: 10, sucked: 0, shiny: 0, season: (typeof Game !== 'undefined' ? (Game.season || '') : '')};
+var out = {count: 0, max: 10, sucked: 0, shiny: 0, halloweenDone: true,
+           season: (typeof Game !== 'undefined' ? (Game.season || '') : '')};
 if (typeof Game === 'undefined' || !Game.wrinklers) return out;
 if (typeof Game.getWrinklersMax === 'function') out.max = Game.getWrinklersMax();
+// Are all 7 Halloween wrinkler-drop cookies already owned? If so there's no
+// drop left to farm, so popping during Halloween is pure loss (holding pays
+// 1.1x). Only while incomplete is Halloween popping worth it.
+if (Game.halloweenDrops) {
+    out.halloweenDone = true;
+    for (var h = 0; h < Game.halloweenDrops.length; h++) {
+        var u = Game.Upgrades[Game.halloweenDrops[h]];
+        if (u && !u.bought) { out.halloweenDone = false; break; }
+    }
+}
 for (var i = 0; i < Game.wrinklers.length; i++) {
     var w = Game.wrinklers[i];
     if (!w || w.phase != 2) continue;

@@ -138,6 +138,7 @@ class CookieBot:
         self._combo_log_start_t = 0.0
         self._combo_log_start_cookies = 0.0
         self._combo_log_peak = 1.0
+        self._garden_unlocked = None  # set of unlocked plant keys, for unlock logging
         self._sell_mode_logged = False
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
@@ -187,6 +188,8 @@ class CookieBot:
         # we start it after the barrier wait below, not now.
         if start_intervals and not self.cfg.barrier_dir:
             start_auto_intervals(self.driver)
+        # Tell the shimmer auto-popper whether to pop wrath cookies.
+        self.driver.execute_script(scripts.SET_POP_WRATH, bool(self.cfg.pop_wrath))
         self._load_upgrade_catalog()
         self.golden_count = int(self.driver.execute_script(
             scripts.COUNT_GOLDEN_COOKIE_UPGRADES, GOLDEN_COOKIE_UPGRADE_NAMES,
@@ -441,27 +444,31 @@ class CookieBot:
 
     def _note_idle(self, cookies, cookies_ps, buildings, scored_upgrades,
                    store_prices, reserve_target_s) -> None:
-        """Log what the bot is actually waiting on. We report the SOONEST worthwhile
-        buy (the cheapest item) — not the highest-scored one, which may be hours
-        away and made the log read like a multi-hour stall when the bot is really
-        about to buy a cheap building shortly."""
-        cands = [(b.price, b.name) for b in buildings if b.price > 0]
-        cands += [(store_prices.get(uid, float("inf")), self.upgrades_by_id[uid].name)
-                  for uid, _ in scored_upgrades]
-        cands = [(p, n) for p, n in cands if p > 0 and p != float("inf")]
+        """Explain why nothing was bought. Two cases: (1) can't afford even the
+        cheapest worthwhile buy → banking to reach it (report it + ETA); (2) the
+        cheapest is affordable but the bot is deliberately saving for a
+        higher-value item (the dynamic banking rule chose to wait) → say so, not
+        'stall'. Reporting the cheapest (not the top) keeps the ETA realistic."""
+        cands = [(b.price, b.name, b.heuristic) for b in buildings if b.price > 0]
+        cands += [(store_prices.get(uid, float("inf")), self.upgrades_by_id[uid].name, sc)
+                  for uid, sc in scored_upgrades]
+        cands = [c for c in cands if c[0] > 0 and c[0] != float("inf")]
         if not cands:
             return
-        price, name = min(cands)
         reserve_cookies = cookies_ps * reserve_target_s
-        short = max(0.0, price + reserve_cookies - cookies)
-        eta = short / cookies_ps if cookies_ps > 0 else float("inf")
-        if short > 0:
+        cprice, cname, _ = min(cands, key=lambda c: c[0])          # cheapest
+        bprice, bname, _ = max(cands, key=lambda c: c[2])          # highest value/cost
+        cps = cookies_ps if cookies_ps > 0 else float("inf")
+        if cprice + reserve_cookies - cookies > 0:
+            short = cprice + reserve_cookies - cookies
             log.info("banking: next buy %s in ~%.0fs (%.2e short, cps %.2e%s)",
-                     name, eta, short, cookies_ps,
+                     cname, short / cps, short, cookies_ps,
                      f", reserve {reserve_target_s:g}s" if reserve_target_s else "")
         else:
-            log.info("idle: cheapest buy %s affordable but not bought — possible stall "
-                     "(have %.2e, cps %.2e)", name, cookies, cookies_ps)
+            # Cheapest affordable but held — saving for the best value/cost item.
+            short = max(0.0, bprice + reserve_cookies - cookies)
+            log.info("saving for %s (best value) in ~%.0fs — %s affordable now but worth "
+                     "less", bname, short / cps, cname)
 
     def _buy_drain(
         self,
@@ -746,9 +753,10 @@ class CookieBot:
         n, mult = int(res.get("n", 0)), float(res.get("mult", 1.0))
         magic, magic_m = res.get("magic") or 0, res.get("magicM") or 0
         if res.get("cast"):
-            log.info("COMBO: cast FtHoF on %d-buff stack (×%.1f CpS, magic %.0f/%.0f, %d on screen)",
-                     n, mult, magic, magic_m, int(res.get("goldens", 0)))
-            self._status.update(last_action=f"FtHoF combo ×{mult:.0f}")
+            kind = "escalate" if n >= 2 else "open"
+            log.info("COMBO: cast FtHoF (%s) on %d-buff ×%.1f stack — magic %.0f/%.0f, %d on screen",
+                     kind, n, mult, magic, magic_m, int(res.get("goldens", 0)))
+            self._status.update(last_action=f"FtHoF {kind} ×{mult:.0f}")
             self._combo_warn_at = 0.0
         elif n >= 2 and res.get("hasGrimoire"):
             # Buff stack present but no cast — almost always not enough magic.
@@ -881,16 +889,24 @@ class CookieBot:
                             wrinkler_sucked=sucked, wrinkler_shiny=shiny)
         if count == 0 or sucked <= 0:
             return
-        halloween = st.get("season") == "halloween"
+        # Holding wrinklers is net +5–11% (they pay 1.1x/3.3x of what they digest),
+        # so optimal play is to HOLD and only realise the value when it matters:
+        #   • automatically right before an auto-ascend (handled in ascend_tick) —
+        #     un-popped cookies would be lost from the prestige total;
+        #   • manually via 'w' when you want a lump for a specific huge buy.
+        # The ONE worthwhile auto-pop is Halloween farming: each pop can drop one
+        # of the 7 spooky-cookie permanent upgrades — but ONLY while they're still
+        # incomplete. Once all 7 are owned, popping is pure loss, so we hold.
+        halloween_farm = (st.get("season") == "halloween"
+                          and not st.get("halloweenDone", True))
         strat = self.cfg.wrinkler_strategy
-        if strat == "hold" and not halloween:
-            return  # let them fatten; 'w' pops manually
-        # Halloween or "always" → pop whenever anything's eaten (cycle for drops /
-        # shiny). "pop-when-full" → pop the batch once every slot is occupied.
-        pop = halloween or strat == "always" or (mx > 0 and count >= mx)
+        # "pop-when-full"/"always" are opt-in legacy cycling modes; "hold" (default)
+        # never auto-pops outside the Halloween-drop window.
+        pop = halloween_farm or strat == "always" or (
+            strat == "pop-when-full" and mx > 0 and count >= mx)
         if pop:
             self.driver.execute_script(scripts.POP_WRINKLERS)
-            tag = " (Halloween farm)" if halloween else ""
+            tag = " (Halloween drop farm)" if halloween_farm else ""
             self._status.update(last_action=f"popped {count} wrinklers{tag}",
                                 wrinkler_count=0, wrinkler_sucked=0.0, wrinkler_shiny=0)
 
@@ -909,6 +925,18 @@ class CookieBot:
             return  # Garden not built yet (no Farm level 1)
         self._garden_state = snap
         st = self._status
+        # Visibility: announce newly-unlocked species (breeding progress) and the
+        # current breeding targets, so a stalled garden is obvious from the log.
+        unlocked = {p["key"] for p in snap.get("plants", []) if p.get("unlocked")}
+        if self._garden_unlocked is not None:
+            new = unlocked - self._garden_unlocked
+            if new:
+                log.info("garden: unlocked new plant(s): %s", ", ".join(sorted(new)))
+        else:
+            locked = [p["key"] for p in snap.get("plants", []) if not p.get("unlocked")]
+            log.info("garden: %d/%d plants unlocked (%d still locked), strategy '%s'",
+                     len(unlocked), len(snap.get("plants", [])), len(locked), self.cfg.garden_strategy)
+        self._garden_unlocked = unlocked
         # Don't let seed-buying dip below the golden-cookie reserve (same rule
         # the purchase logic uses: engaged once all 3 holding upgrades are owned).
         reserve = self._reserve_target(st.cookies_ps) if self.golden_count == 3 else 0.0
@@ -1180,16 +1208,31 @@ class CookieBot:
             self._heavenly_warn_logged = True
 
     def ascend_tick(self) -> None:
+        # Safety net: if a prior reincarnation didn't complete and we're stuck on
+        # the ascension screen, force it now instead of idling there for minutes.
+        try:
+            if self.driver.execute_script(scripts.FINISH_ASCENSION):
+                log.info("forced reincarnation (was stuck on the ascension screen)")
+                return
+        except Exception:
+            log.exception("finish-ascension check failed")
         info = self.driver.execute_script(scripts.ASCEND_INFO)
         prestige = float(info["prestige"])
         potential = float(info["potential"])
         gain = potential - prestige
-        if gain < 1:
+        # Absolute floor — never reset for a trivial chip gain (e.g. the first
+        # ascension at +1). Then the configured relative jump for later ascensions.
+        if gain < max(1.0, self.cfg.auto_ascend_min_chips):
             return
-        # First ascension (prestige 0): go as soon as there's a chip to gain.
-        # Otherwise require the configured relative jump.
         gain_pct = float("inf") if prestige <= 0 else gain / prestige * 100
         if gain_pct < self.cfg.auto_ascend_gain_pct:
+            return
+        # Don't reset mid-combo: a golden-cookie buff (Frenzy/Click Frenzy/…) or an
+        # unpopped shimmer means we're about to bake a lot more cookies, which is
+        # more prestige. Wait for it to wear off so we capture it first.
+        if info.get("buffed") or info.get("shimmers"):
+            log.info("auto-ascend deferred: golden-cookie effect active — capturing it "
+                     "before the reset (more heavenly chips)")
             return
         log.info("auto-ascend: prestige %.0f → %.0f (+%.0f, %.1f%%)",
                  prestige, potential, gain, gain_pct)
