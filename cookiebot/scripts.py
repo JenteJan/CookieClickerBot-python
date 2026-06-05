@@ -550,9 +550,21 @@ for (var i = 0; i < acts.length; i++) {
                 out.planted++;
             }
         } else if (a.op === 'harvest') {
-            if (M.getTile(a.x, a.y)[0] !== 0) {
+            var tt = M.getTile(a.x, a.y);
+            if (tt[0] !== 0) {
+                var hp = M.plantsById[tt[0]];
+                var wasUnlocked = hp ? !!hp.unlocked : true;
+                var hage = tt[1], hmat = hp ? hp.mature : 0;
                 M.harvest(a.x, a.y);
                 out.harvested++;
+                // Track unlock-on-harvest: a mature locked species SHOULD flip to
+                // unlocked here. Report both outcomes so the Python side can tell
+                // whether discovery is actually being captured.
+                if (hp && !wasUnlocked) {
+                    if (hp.unlocked) { (out.unlocked = out.unlocked || []).push(hp.key); }
+                    else { (out.notUnlocked = out.notUnlocked || []).push(
+                        hp.key + " age=" + hage + "/" + hmat); }
+                }
             }
         }
     } catch (e) {}

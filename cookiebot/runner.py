@@ -596,6 +596,16 @@ class CookieBot:
                 # saving). Don't bank for a top below the payback cap either.
                 cap_ok = min_score <= 0 or top[3] >= min_score
                 if wait_s <= 0 or (cap_ok and wait_s < worth_waiting):
+                    # Make the commit visible (deduped): when we hold the bank for a
+                    # high-value one-time upgrade, say which one and the ETA, so it's
+                    # obvious the bot is saving for it and not stalling.
+                    if top_is_priority_upgrade and top[0] == "u" and wait_s > 0:
+                        nm = self.upgrades_by_id[top[1]].name
+                        if getattr(self, "_saving_for", None) != nm:
+                            self._saving_for = nm
+                            log.info("committing bank to high-value upgrade %s "
+                                     "(~%.0fs at current CpS) over lower-value buildings",
+                                     nm, wait_s)
                     break  # bank for the clearly-better, soon-enough top item
                 choice = best_aff
 
@@ -1026,6 +1036,14 @@ class CookieBot:
         except Exception:
             log.exception("garden actions failed")
             return
+        # Did harvesting a mature LOCKED species actually capture its unlock? If
+        # `notUnlocked` shows up, M.harvest didn't flip the seed despite us thinking
+        # it was mature — that's the real discovery blocker (not premature harvest).
+        if res.get("unlocked"):
+            log.info("garden: harvest UNLOCKED %s ✓", ", ".join(res["unlocked"]))
+        if res.get("notUnlocked"):
+            log.info("garden: harvested locked %s but it did NOT unlock — maturity "
+                     "threshold mismatch?", ", ".join(res["notUnlocked"]))
         planted, harvested = int(res.get("planted", 0)), int(res.get("harvested", 0))
         if planted or harvested:
             self._status.update(
