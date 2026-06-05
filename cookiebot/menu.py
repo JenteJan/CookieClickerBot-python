@@ -234,7 +234,9 @@ def _settings_entries() -> list:
                     "Auto-buy heavenly (prestige-tree) upgrades, cheapest unlocked first?"),
         _bool_entry("Auto-play garden", "auto_garden", "Auto-play the garden? (breed seeds, then steady-state layout)"),
         ("Garden strategy", lambda c: c.garden_strategy,
-         lambda c: setattr(c, "garden_strategy", Prompt.ask("Garden strategy (cps/golden/juicy)", choices=["cps", "golden", "juicy"], default=c.garden_strategy))),
+         lambda c: setattr(c, "garden_strategy", Prompt.ask(
+             "Garden goal (discover = unlock every plant; cps/golden/juicy = breed one pair then farm)",
+             choices=["discover", "cps", "golden", "juicy"], default=c.garden_strategy))),
         _bool_entry("Garden: breed soil (Wood chips)", "garden_breed_soil", "Use Wood chips soil while breeding? (faster mutations)"),
     ]
 

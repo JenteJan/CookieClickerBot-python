@@ -33,6 +33,12 @@ STRATEGY_PLANTS = {
     "juicy": ("queenbeet", "juicyQueenbeet"),
 }
 
+# "discover" is special: it isn't aiming at a fixed pair, it breeds until EVERY
+# plant in the seed log is unlocked (maximising discovery — no breeding plant has
+# a harvest value worth stopping for). Once the log is complete it settles into
+# this layout.
+DISCOVER_DONE_LAYOUT = "cps"
+
 WOODCHIPS_KEY = "woodchips"   # +3x mutation/spread (req 300 farms) — breeding
 CLAY_KEY = "clay"             # +25% plant effects (req 100 farms) — steady CpS
 DIRT_KEY = "dirt"            # neutral fallback (req 0)
@@ -51,7 +57,11 @@ def _index(snap: dict):
 
 
 def _breeding_active(strategy: str, plants_by_key: dict) -> bool:
-    """True while any of the strategy's plants is still locked."""
+    """True while there's still something worth breeding for. For "discover" that's
+    ANY locked plant in the whole seed log; for the targeted strategies it's any of
+    that strategy's specific plants still being locked."""
+    if strategy == "discover":
+        return any(not p["unlocked"] for p in plants_by_key.values())
     for key in STRATEGY_PLANTS.get(strategy, ()):  # unknown strategy → no targets
         p = plants_by_key.get(key)
         if p is not None and not p["unlocked"]:
@@ -188,6 +198,8 @@ def _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
 def _desired_key(x: int, y: int, strategy: str):
     """The plant key wanted at (x,y) for a steady-state layout, or None to leave
     the tile empty (juicy mutation centers)."""
+    if strategy == "discover":  # log complete → settle into a solid CpS layout
+        strategy = DISCOVER_DONE_LAYOUT
     a, b = STRATEGY_PLANTS[strategy]
     if strategy == "juicy":
         # 3x3 rings of Queenbeet around an empty center → Juicy Queenbeet rolls.

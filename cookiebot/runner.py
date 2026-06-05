@@ -928,7 +928,8 @@ class CookieBot:
         # Visibility: announce newly-unlocked species (breeding progress) and the
         # current breeding targets, so a stalled garden is obvious from the log.
         unlocked = {p["key"] for p in snap.get("plants", []) if p.get("unlocked")}
-        if self._garden_unlocked is not None:
+        first_observation = self._garden_unlocked is None
+        if not first_observation:
             new = unlocked - self._garden_unlocked
             if new:
                 log.info("garden: unlocked new plant(s): %s", ", ".join(sorted(new)))
@@ -951,6 +952,15 @@ class CookieBot:
                                      f"{filled}/{len(tiles)} tiles, {ripe} ripe")
         else:
             st.update(garden_summary=f"{len(unlocked)}/{nplants} plants unlocked")
+        # First tick after a (re)start: read-only sync. We've now recorded the
+        # restored board + refreshed the panel, but we DON'T plant or harvest yet —
+        # so we never reap a just-loaded garden before having observed it. Cookie
+        # Clicker advances the garden during downtime, so plants can come back
+        # mature; letting one cycle pass first makes the resume obvious in the panel
+        # and avoids the "restart silently reset my farm" surprise. Acting resumes
+        # on the next tick.
+        if first_observation:
+            return
         # Seed budget: a small slice of the bank, NOT gated behind the full
         # golden-cookie reserve. Seeds cost only seconds-to-minutes of CpS, but the
         # golden reserve is 6000 s–12 h of CpS — on a save that's perpetually

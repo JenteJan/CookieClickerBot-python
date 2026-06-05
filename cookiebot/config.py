@@ -367,11 +367,14 @@ class Config:
     # (mutation-favoring Wood chips soil), then fill the grid with a steady-state
     # layout. The seed log is NEVER auto-sacrificed (M.convert is never called).
     auto_garden: bool = False
-    # Steady-state layout once the strategy's plants are unlocked:
-    #   "cps"    — Queenbeet/Elderwort passive CpS boost (immortal, low micro).
-    #   "golden" — Shimmerlily/Golden clover for golden-cookie frequency.
-    #   "juicy"  — experimental Juicy Queenbeet farming (big cookie bursts).
-    garden_strategy: str = "cps"
+    # Garden goal:
+    #   "discover" — DEFAULT. Breed until EVERY plant in the seed log is unlocked
+    #                (no breeding plant has a harvest value worth stopping for);
+    #                then settle into the CpS layout. Maximises discovery.
+    #   "cps"      — breed only Queenbeet/Elderwort, then their passive CpS boost.
+    #   "golden"   — breed Shimmerlily/Golden clover for golden-cookie frequency.
+    #   "juicy"    — experimental Juicy Queenbeet farming (big cookie bursts).
+    garden_strategy: str = "discover"
     # During the breeding phase, switch soil to Wood chips (favors mutations).
     # Respects the 10-min soil cooldown. Off keeps soil on dirt (slower unlocks).
     garden_breed_soil: bool = True
