@@ -937,9 +937,29 @@ class CookieBot:
             log.info("garden: %d/%d plants unlocked (%d still locked), strategy '%s'",
                      len(unlocked), len(snap.get("plants", [])), len(locked), self.cfg.garden_strategy)
         self._garden_unlocked = unlocked
-        # Don't let seed-buying dip below the golden-cookie reserve (same rule
-        # the purchase logic uses: engaged once all 3 holding upgrades are owned).
-        reserve = self._reserve_target(st.cookies_ps) if self.golden_count == 3 else 0.0
+        # Persistent garden line for the side-quests panel — refreshed EVERY tick,
+        # before any early-return, so the row always shows the live state (breeding
+        # progress + tiles) even on ticks with nothing to plant/harvest. (Previously
+        # it was set only after the `if not actions: return` below, so it never
+        # appeared on a freshly-started run.)
+        tiles = snap.get("tiles") or []
+        nplants = len(snap.get("plants", []))
+        if tiles:
+            filled = sum(1 for t in tiles if t.get("id"))
+            ripe = sum(1 for t in tiles if t.get("mature"))
+            st.update(garden_summary=f"{len(unlocked)}/{nplants} plants · "
+                                     f"{filled}/{len(tiles)} tiles, {ripe} ripe")
+        else:
+            st.update(garden_summary=f"{len(unlocked)}/{nplants} plants unlocked")
+        # Seed budget: a small slice of the bank, NOT gated behind the full
+        # golden-cookie reserve. Seeds cost only seconds-to-minutes of CpS, but the
+        # golden reserve is 6000 s–12 h of CpS — on a save that's perpetually
+        # banking for the next building, cookies sit at/below that reserve, so the
+        # old `cookies - reserve` budget clamped to 0 and the garden never planted
+        # anything (an empty garden can't mutate). Capping at 5% of the bank keeps
+        # planting alive while leaving the golden reserve essentially untouched
+        # (actual spend is a few cheap seeds, capped at MAX_PLANTS_PER_TICK).
+        reserve = st.cookies * 0.95
         actions = garden.decide_actions(
             snap, self.cfg.garden_strategy, self.cfg.garden_breed_soil,
             cookies=st.cookies, cookies_ps=st.cookies_ps, reserve_cookies=reserve,
@@ -956,14 +976,6 @@ class CookieBot:
             self._status.update(
                 last_action=f"garden: +{planted} planted / -{harvested} harvested"
             )
-        # Persistent garden line for the side-quests panel.
-        tiles = snap.get("tiles") or []
-        if tiles:
-            filled = sum(1 for t in tiles if t.get("id"))
-            ripe = sum(1 for t in tiles if t.get("mature"))
-            self._status.update(garden_summary=f"{filled}/{len(tiles)} tiles · {ripe} ripe")
-        else:
-            self._status.update(garden_summary="active")
 
     def _init_trial_log(self) -> None:
         if not self.cfg.ab_log:
