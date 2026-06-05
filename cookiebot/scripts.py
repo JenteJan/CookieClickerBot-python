@@ -500,8 +500,10 @@ for (var y = 0; y < 6; y++) {
         var t;
         try { t = M.getTile(x, y); } catch (e) { continue; }
         var id = t[0], age = t[1];
-        var matureAge = (id && M.plantsById[id]) ? M.plantsById[id].mature : 0;
-        tiles.push({x: x, y: y, id: id, age: age, mature: id !== 0 && age >= matureAge});
+        var pl = id ? M.plantsById[id] : null;
+        var matureAge = pl ? pl.mature : 0;
+        tiles.push({x: x, y: y, id: id, age: age, matureAge: matureAge,
+                    key: pl ? pl.key : null, mature: id !== 0 && age >= matureAge});
     }
 }
 return {

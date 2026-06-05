@@ -576,7 +576,22 @@ class CookieBot:
                 wait_s = (top[2] - bank) / cookies_ps if cookies_ps > 0 else float("inf")
                 payback_top = 1.0 / top[3] if top[3] > 0 else float("inf")
                 payback_aff = 1.0 / best_aff[3] if best_aff[3] > 0 else float("inf")
-                worth_waiting = min(payback_aff - payback_top, self.cfg.bank_horizon_s)
+                # A one-time UPGRADE that clearly out-values the best affordable buy
+                # (e.g. "Get lucky", a kitten/cookie multiplier) is worth committing
+                # to: unlike a building it can't be substituted by a cheaper item, and
+                # its value/cost stays put while building prices climb ×1.15. So when
+                # the top is such an upgrade we save for it up to the full bank
+                # horizon, instead of letting near-frontier building spam preempt it
+                # (the old payback-advantage threshold shrank to ~0 whenever an
+                # affordable building was almost as efficient, so a top upgrade like
+                # Get lucky never got bought). For everything else, keep the
+                # payback-advantage rule.
+                top_is_priority_upgrade = (top[0] == "u" and best_aff[3] > 0
+                                           and top[3] >= best_aff[3] * 1.10)
+                if top_is_priority_upgrade:
+                    worth_waiting = self.cfg.bank_horizon_s
+                else:
+                    worth_waiting = min(payback_aff - payback_top, self.cfg.bank_horizon_s)
                 # wait<=0 = the reserve (not price) blocks the top -> bank (golden
                 # saving). Don't bank for a top below the payback cap either.
                 cap_ok = min_score <= 0 or top[3] >= min_score
@@ -960,6 +975,21 @@ class CookieBot:
         # and avoids the "restart silently reset my farm" surprise. Acting resumes
         # on the next tick.
         if first_observation:
+            # One-time DIAG of every occupied tile: plant, raw age, the maturity
+            # threshold we compare against, and whether we'd call it mature + its
+            # tile role. This is how we tell whether a "harvested too early" report
+            # is a wrong maturity threshold vs. parents not persisting — without it
+            # we're guessing at Cookie Clicker's growth internals.
+            occ = [t for t in tiles if t.get("id")]
+            if occ:
+                desc = ", ".join(
+                    "{k}@({x},{y}) age={a:g}/{m:g}{mat} {role}".format(
+                        k=t.get("key") or t.get("id"), x=t["x"], y=t["y"],
+                        a=t.get("age", 0), m=t.get("matureAge", 0),
+                        mat="✓MATURE" if t.get("mature") else "",
+                        role="parent" if (t["x"] + t["y"]) % 2 == 0 else "mutation")
+                    for t in occ)
+                log.info("garden DIAG (occupied tiles): %s", desc)
             return
         # Seed budget: a small slice of the bank, NOT gated behind the full
         # golden-cookie reserve. Seeds cost only seconds-to-minutes of CpS, but the
@@ -976,6 +1006,21 @@ class CookieBot:
         )
         if not actions:
             return
+        # Log EXACTLY what we're harvesting and the age/threshold it was at — the
+        # decisive evidence for a "harvested too early" report. If these show
+        # age≈matureAge it's correct; if age≪matureAge our maturity flag is wrong.
+        harv = [a for a in actions if a["op"] == "harvest"]
+        if harv:
+            by_xy = {(t["x"], t["y"]): t for t in tiles}
+            detail = ", ".join(
+                "{k}@({x},{y}) age={a:g}/{m:g} {role}".format(
+                    k=(by_xy.get((a["x"], a["y"]), {}).get("key") or "?"),
+                    x=a["x"], y=a["y"],
+                    a=by_xy.get((a["x"], a["y"]), {}).get("age", 0),
+                    m=by_xy.get((a["x"], a["y"]), {}).get("matureAge", 0),
+                    role="parent" if (a["x"] + a["y"]) % 2 == 0 else "mutation")
+                for a in harv)
+            log.info("garden: harvesting %d — %s", len(harv), detail)
         try:
             res = self.driver.execute_script(scripts.GARDEN_ACTIONS, actions) or {}
         except Exception:
