@@ -456,19 +456,18 @@ class CookieBot:
         if not cands:
             return
         reserve_cookies = cookies_ps * reserve_target_s
-        cprice, cname, _ = min(cands, key=lambda c: c[0])          # cheapest
-        bprice, bname, _ = max(cands, key=lambda c: c[2])          # highest value/cost
         cps = cookies_ps if cookies_ps > 0 else float("inf")
-        if cprice + reserve_cookies - cookies > 0:
-            short = cprice + reserve_cookies - cookies
-            log.info("banking: next buy %s in ~%.0fs (%.2e short, cps %.2e%s)",
-                     cname, short / cps, short, cookies_ps,
-                     f", reserve {reserve_target_s:g}s" if reserve_target_s else "")
-        else:
-            # Cheapest affordable but held — saving for the best value/cost item.
-            short = max(0.0, bprice + reserve_cookies - cookies)
-            log.info("saving for %s (best value) in ~%.0fs — %s affordable now but worth "
-                     "less", bname, short / cps, cname)
+        # Report what the bot is actually banking TOWARD: the best value/cost item
+        # (the purchase rule holds the bank for it when it's a high-value upgrade
+        # like Get lucky). Reporting the merely-cheapest item was misleading — it
+        # named some random cheap building while the bot was saving for the top
+        # upgrade. Also surface the cheapest item as context when it differs.
+        bprice, bname, _ = max(cands, key=lambda c: c[2])          # best value/cost
+        cprice, cname, _ = min(cands, key=lambda c: c[0])          # cheapest
+        short = max(0.0, bprice + reserve_cookies - cookies)
+        extra = "" if cname == bname else f" (cheapest now: {cname})"
+        log.info("banking toward %s (best value) in ~%.0fs (%.2e short, cps %.2e)%s",
+                 bname, short / cps, short, cookies_ps, extra)
 
     def _buy_drain(
         self,

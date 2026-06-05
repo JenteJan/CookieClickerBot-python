@@ -66,6 +66,13 @@ def building_buy_crosses_achievement(amount: int, qty: int = 1) -> bool:
 #
 # Since cookiesPs is live, both caps auto-rise during a Frenzy.
 
+# Value (×CpS / price) for the golden-cookie DOUBLER upgrades (Get lucky, Lucky
+# day, Serendipity). They ~double the income contribution of every golden cookie/
+# combo and are one-time permanents — well worth out-ranking the marginal building
+# frontier so the bot buys/saves for them early. Tuned to dominate buildings in
+# payback mode without being absurd; they leave the store once bought.
+_GOLDEN_DOUBLER_FACTOR = 7.0
+
 _LUCKY_FRAC = 0.15
 _LUCKY_BASE_CAP_S = 15 * 60       # 15 min of CPS, the base Lucky cap
 _GET_LUCKY_CAP_MULT = 7.0          # "Get lucky" raises the cap ~7x
@@ -239,6 +246,18 @@ def parse_upgrade_gain(description: str) -> UpgradeGain:
     # leaving one of the strongest upgrades scored at the 0.05 fallback so it
     # never out-ranked cheap buildings.
     if "golden cookie" in description.lower():
+        dl = description.lower()
+        # The DOUBLERS — "appear twice as often" (Lucky day, Serendipity) and
+        # "effects last twice as long" (Get lucky) — each roughly DOUBLE the
+        # contribution of every golden cookie / combo, which on a combo-farming
+        # bot is a huge share of income, AND they're one-time permanents that
+        # compound with the autoclicker + FtHoF stacking. The plain 2x-CpS value
+        # let payback-mode buildings (scored by true marginal CpS) edge them out,
+        # so the bot kept buying near-worthless buildings instead. Value them well
+        # above the building frontier so they're bought / saved-for first; once
+        # owned they leave the store, so the boost only applies until purchased.
+        if "twice" in dl:
+            return UpgradeGain(_GOLDEN_DOUBLER_FACTOR, "all")
         return UpgradeGain(2.0, "all")
 
     m = _BUILDING_EFF.search(description)
