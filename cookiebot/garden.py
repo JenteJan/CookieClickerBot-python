@@ -30,7 +30,7 @@ from __future__ import annotations
 STRATEGY_PLANTS = {
     "cps": ("queenbeet", "elderwort"),
     "golden": ("shimmerlily", "goldenClover"),
-    "juicy": ("queenbeet", "juicyQueenbeet"),
+    "juicy": ("queenbeet", "queenbeetLump"),
 }
 
 # "discover" is special: it isn't aiming at a fixed pair, it breeds until EVERY
@@ -81,43 +81,154 @@ def _breeding_active(strategy: str, plants_by_key: dict) -> bool:
 # rest defer to the next round once this one unlocks and the board advances.
 FOCUS_PARENT_CAP = 2
 
+# The REAL adjacency mutation recipes, transcribed verbatim from minigameGarden.js
+# `getMuts` (child_key -> {parent_key: min_mature_count}). This is the authoritative
+# source — the per-plant ``children`` field lists everything a plant can turn into
+# across ALL recipes, so reverse-mapping it conflates separate recipes and deadlocks
+# (e.g. thumbcorn is a "child" of bakerWheat AND thumbcorn AND cronerice). Where a
+# plant has several recipes we keep the easiest/highest-rate one reachable from the
+# normal tree. Counts >1 of a single species need a denser layout (see _packed/_breed).
+RECIPES: dict[str, dict] = {
+    "thumbcorn":      {"bakerWheat": 2},
+    "bakeberry":      {"bakerWheat": 2},
+    "cronerice":      {"bakerWheat": 1, "thumbcorn": 1},
+    "gildmillet":     {"cronerice": 1, "thumbcorn": 1},
+    "clover":         {"bakerWheat": 1, "gildmillet": 1},
+    "goldenClover":   {"bakerWheat": 1, "gildmillet": 1},  # higher rate than 4-clover; bot does upkeep
+    "shimmerlily":    {"clover": 1, "gildmillet": 1},
+    "elderwort":      {"shimmerlily": 1, "cronerice": 1},
+    "chocoroot":      {"bakerWheat": 1, "brownMold": 1},
+    "whiteChocoroot": {"chocoroot": 1, "whiteMildew": 1},
+    "whiteMildew":    {"brownMold": 1},
+    "whiskerbloom":   {"shimmerlily": 1, "whiteChocoroot": 1},
+    "chimerose":      {"shimmerlily": 1, "whiskerbloom": 1},
+    "nursetulip":     {"whiskerbloom": 2},
+    "drowsyfern":     {"chocoroot": 1, "keenmoss": 1},
+    "wardlichen":     {"cronerice": 1, "whiteMildew": 1},
+    "keenmoss":       {"greenRot": 1, "brownMold": 1},
+    "greenRot":       {"whiteMildew": 1, "clover": 1},
+    "queenbeet":      {"chocoroot": 1, "bakeberry": 1},
+    "queenbeetLump":  {"queenbeet": 8},
+    "duketater":      {"queenbeet": 2},
+    "glovemorel":     {"crumbspore": 1, "thumbcorn": 1},
+    "cheapcap":       {"crumbspore": 1, "shimmerlily": 1},
+    "doughshroom":    {"crumbspore": 2},
+    "foolBolete":     {"doughshroom": 1, "greenRot": 1},
+    "wrinklegill":    {"crumbspore": 1, "brownMold": 1},
+    "shriekbulb":     {"duketater": 3},   # highest-rate adjacency route (0.005)
+    "tidygrass":      {"bakerWheat": 1, "whiteChocoroot": 1},
+    "everdaisy":      {"tidygrass": 3, "elderwort": 3},
+    "ichorpuff":      {"elderwort": 1, "crumbspore": 1},
+}
+
+# Bootstrap species that don't come from adjacency: Meddleweed spawns on tiles ringed
+# by empties, and harvesting it yields Brown Mold / Crumbspore. They seed the whole
+# fungus branch (brownMold<->whiteMildew is otherwise a cycle). Reachable whenever
+# locked, grown by leaving the board empty and harvesting whatever appears.
+BOOTSTRAP_KEYS = {"meddleweed", "brownMold", "crumbspore"}
+
+
+def _recipe_parents(child_key: str) -> set:
+    """Parent species for a child's primary recipe (empty for bootstrap species)."""
+    return set(RECIPES.get(child_key, {}))
+
 
 def _reachable_recipes(plants_by_key: dict) -> list[tuple]:
     """Every mutation we can ACHIEVE right now, as ``(child_id, child_key, parents)``
-    sorted by child id (low tier first).
-
-    A plant's ``children`` lists what it mutates into, so reverse it into
-    ``parents_of[child] = {species that list child}`` — the game's own recipe data
-    (correct keys, no hardcoding). A locked child is REACHABLE only when EVERY one
-    of its parents is already unlocked. Packed (8-neighbour) recipes are excluded —
-    they can't roll on the checkerboard and are handled by ``_packed_breed``.
-
-    Note: the Meddleweed→fungi (Brown Mold / Crumbspore) entry is HARVEST-based,
-    not adjacency, so it isn't in this map — it's covered separately by leaving
-    empty tiles (where Meddleweed spawns) and harvesting every mature mutant."""
-    parents_of: dict[str, set] = {}
-    for p in plants_by_key.values():
-        for c in p["children"]:
-            parents_of.setdefault(c, set()).add(p["key"])
+    sorted by child id (low tier first), using the real ``RECIPES`` table. A locked
+    child is reachable when every parent of its recipe is already unlocked (bootstrap
+    fungi are always reachable). Packed (>2-of-one or multi-set) recipes are excluded
+    here — they need a dedicated dense layout (``_packed_breed``)."""
     unlocked = {k for k, p in plants_by_key.items() if p["unlocked"]}
     recipes: list[tuple] = []
-    for child_key, par in parents_of.items():
-        if child_key in _PACKED_TARGET_KEYS:
-            continue                      # packed recipes can't roll on the checkerboard
-        cp = plants_by_key.get(child_key)
-        if cp is None or cp["unlocked"] or not par:
-            continue                      # only still-locked children with a recipe
+    for child_key, cp in plants_by_key.items():
+        if cp["unlocked"] or child_key in _PACKED_TARGET_KEYS:
+            continue
+        if child_key in BOOTSTRAP_KEYS:
+            recipes.append((cp["id"], child_key, frozenset()))
+            continue
+        rec = RECIPES.get(child_key)
+        if not rec:
+            continue
+        par = set(rec)
         if par <= unlocked:               # every parent available → achievable now
             recipes.append((cp["id"], child_key, frozenset(par)))
     recipes.sort()
     return recipes
 
 
+# Unlock priority (user-chosen): chase Golden Clover + Shimmerlily first — the
+# golden-cookie/sugar-lump plants that supercharge the FtHoF combo engine — then the
+# big passive-CpS plants, then utility effects, then everything else for completion.
+# Plants NOT listed here are pursued last, lowest-id first. Prerequisites of a goal
+# are unlocked automatically on the way (the planner walks the ancestor chain), so
+# this list only needs the *destinations*, not the intermediate tiers.
+UNLOCK_PRIORITY = [
+    # golden-combo
+    "goldenClover", "shimmerlily",
+    # CpS boosters
+    "elderwort", "queenbeet", "queenbeetLump", "bakeberry",
+    # utility effects
+    "ichorpuff", "drowsyfern", "tidygrass", "nursetulip", "whiskerbloom",
+    "chimerose", "keenmoss", "wardlichen", "glovemorel", "cheapcap",
+]
+
+
+def _all_parents_of(plants_by_key: dict) -> dict:
+    """child_key -> set of parent species in its primary RECIPE (real recipe tree)."""
+    return {child: set(rec) for child, rec in RECIPES.items()}
+
+
+def _ancestors_locked(goal: str, plants_by_key: dict, parents_of: dict) -> set:
+    """Every still-LOCKED plant that must be unlocked to reach ``goal`` (including the
+    goal) — walk the recipe tree backwards through parents, stopping at unlocked ones.
+    This is the dependency chain we breed in order."""
+    out: set = set()
+    stack = [goal]
+    while stack:
+        k = stack.pop()
+        p = plants_by_key.get(k)
+        if p is None or p["unlocked"] or k in out:
+            continue
+        out.add(k)
+        for par in parents_of.get(k, ()):  # its parents must come first
+            stack.append(par)
+    return out
+
+
+def _priority_goal(plants_by_key: dict) -> str | None:
+    """The highest-priority plant still locked: first match in ``UNLOCK_PRIORITY``,
+    then any other locked plant (completion phase), lowest-id first."""
+    for k in UNLOCK_PRIORITY:
+        p = plants_by_key.get(k)
+        if p is not None and not p["unlocked"]:
+            return k
+    others = sorted((p for k, p in plants_by_key.items()
+                     if not p["unlocked"] and k not in UNLOCK_PRIORITY),
+                    key=lambda p: p["id"])
+    return others[0]["key"] if others else None
+
+
+def _focus_recipes(plants_by_key: dict) -> list[tuple]:
+    """Reachable recipes restricted to the current priority goal's dependency chain,
+    so breeding always advances toward the most valuable locked plant (Golden Clover
+    first) instead of whatever happens to be lowest-tier. Falls back to all reachable
+    recipes if nothing on the chain is reachable yet (shouldn't normally happen)."""
+    recipes = _reachable_recipes(plants_by_key)
+    goal = _priority_goal(plants_by_key)
+    if goal:
+        need = _ancestors_locked(goal, plants_by_key, _all_parents_of(plants_by_key))
+        on_path = [r for r in recipes if r[1] in need]
+        if on_path:
+            return on_path
+    return recipes
+
+
 def _focus_parents(recipes: list[tuple]) -> set:
-    """Pick the parent species to actually plant: always the lowest-tier reachable
-    recipe, plus any further recipe that fits without pushing the distinct-parent
-    count past ``FOCUS_PARENT_CAP`` (recipes sharing those parents come along free).
-    Keeps adjacency density high so the focused recipes roll quickly."""
+    """Pick the parent species to actually plant: always the lowest-tier recipe in the
+    (already priority-filtered) list, plus any further recipe that fits without pushing
+    the distinct-parent count past ``FOCUS_PARENT_CAP`` (recipes sharing those parents
+    come along free). Keeps adjacency density high so the focused recipes roll fast."""
     chosen: set = set()
     for _cid, _ck, par in recipes:
         if not chosen or len(chosen | par) <= FOCUS_PARENT_CAP:
@@ -126,9 +237,10 @@ def _focus_parents(recipes: list[tuple]) -> set:
 
 
 def _reachable_parents(plants_by_key: dict) -> list[dict]:
-    """The focused parent species to plant this round (see ``_focus_parents``),
+    """The focused parent species to plant this round — the lowest-tier recipe on the
+    way to the highest-priority locked plant (see ``_focus_recipes``/``_focus_parents``),
     sorted by id (low tier first) for deterministic placement."""
-    chosen = _focus_parents(_reachable_recipes(plants_by_key))
+    chosen = _focus_parents(_focus_recipes(plants_by_key))
     return sorted((plants_by_key[k] for k in chosen if k in plants_by_key),
                   key=lambda p: p["id"])
 
@@ -140,32 +252,20 @@ def breeding_plan(snap: dict) -> dict:
     pursued this round, their parent species, how many reachable recipes are
     deferred to later rounds, and any packed target."""
     if not snap or not snap.get("unlocked"):
-        return {"targets": [], "parents": [], "queued": 0, "packed": None}
+        return {"targets": [], "parents": [], "queued": 0, "packed": None, "goal": None}
     plants_by_key, _by_id, _soils = _index(snap)
-    recipes = _reachable_recipes(plants_by_key)
+    all_reachable = _reachable_recipes(plants_by_key)
+    recipes = _focus_recipes(plants_by_key)
     chosen = _focus_parents(recipes)
     targets = [ck for _cid, ck, par in recipes if par <= chosen]
     packed = _packed_target(plants_by_key, snap.get("tiles", []))
     return {
         "targets": targets,
         "parents": sorted(chosen),
-        "queued": max(0, len(recipes) - len(targets)),
+        "queued": max(0, len(all_reachable) - len(targets)),
         "packed": packed[0] if packed else None,
+        "goal": _priority_goal(plants_by_key),
     }
-
-
-def _relevant_parents(plants_by_key: dict) -> list[dict]:
-    """Fallback: any unlocked plant that is a parent of at least one still-locked
-    plant (even if a co-parent is missing). Used only when no fully-reachable
-    mutation exists, to keep low-tier rolls going. Sorted by id."""
-    out = []
-    for p in plants_by_key.values():
-        if not p["unlocked"]:
-            continue
-        if any(not plants_by_key.get(c, {"unlocked": True})["unlocked"] for c in p["children"]):
-            out.append(p)
-    out.sort(key=lambda p: p["id"])
-    return out
 
 
 # Recipes that need a PACKED 3x3 neighbourhood (the game counts all 8 Moore
@@ -175,7 +275,7 @@ def _relevant_parents(plants_by_key: dict) -> list[dict]:
 #   Everdaisy:       needs >=3 Tidygrass AND >=3 Elderwort around the centre — a
 #                    2-species ring alternates to put 4 of each around each centre.
 _PACKED_RECIPES = [
-    ("juicyQueenbeet", ["queenbeet"]),
+    ("queenbeetLump", ["queenbeet"]),
     ("everdaisy", ["tidygrass", "elderwort"]),
 ]
 _PACKED_TARGET_KEYS = {t for t, _ in _PACKED_RECIPES}
@@ -187,13 +287,31 @@ def _is_center(x: int, y: int) -> bool:
 
 
 def _is_parent_tile(x: int, y: int) -> bool:
-    """Breeding-layout parent tiles: the (even, even) sublattice (a quarter of the
-    grid). Parents sit here so the empty (odd, odd) mutation tiles touch them only
-    DIAGONALLY — which counts for mutations (Moore-8 neighbourhood) but NOT for
-    contamination/spreading (cardinal-4 only). The other ~3/4 of tiles stay empty,
-    giving mutations real room instead of a dense checkerboard the parents spread
-    over before anything can mutate."""
-    return x % 2 == 0 and y % 2 == 0
+    """Breeding-layout parent tiles: isolated horizontal PAIRS — two adjacent tiles
+    (``x%3`` in {0,1}) on every third row (``y%3==0``), so each pair is ringed by
+    empty tiles and no empty tile ever borders two different pairs.
+
+    Why pairs and not a checkerboard/lattice: mutations read all 8 (Moore) neighbours
+    (verified in minigameGarden.js — Juicy Queenbeet needs ``neighsM['queenbeet']>=8``,
+    impossible with only 4 cardinal). The recipe table also has self-spread rules like
+    ``neighsM['bakerWheat']>=2 -> bakerWheat 0.2``: any empty tile seeing TWO of the
+    same parent mostly grows a copy of that parent (0.2) instead of the wanted cross
+    (cronerice 0.01), and that copy fills the slot. A denser layout puts 2+ of a parent
+    around each empty tile and chokes itself. Isolated pairs make every mutation tile
+    see EXACTLY the one pair next to it — 1 of each parent for a two-parent recipe (no
+    ``>=2`` self-spread) or exactly 2 for a same-species recipe (which NEEDS ``>=2``).
+    This is the wiki's G/Y setup; horizontal pairs also get the left-to-right tick
+    processing bonus the wiki notes."""
+    return y % 3 == 0 and (x % 3 == 0 or x % 3 == 1)
+
+
+def _pair_species(x: int, parents: list) -> dict:
+    """Species for a parent tile: left tile of the pair (``x%3==0``) → ``parents[0]``,
+    right tile (``x%3==1``) → ``parents[-1]``. For a single-parent (same-species)
+    recipe ``parents`` has one entry, so both tiles get it → a 2-of-a-kind pair that
+    satisfies the recipe's ``>=2`` requirement; for a two-parent recipe the pair holds
+    one of each (the lower-id parent on the left, deterministic)."""
+    return parents[0] if x % 3 == 0 else parents[-1]
 
 
 def _packed_target(plants_by_key: dict, tiles: list[dict]):
@@ -322,20 +440,23 @@ def _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
     if breed_soil:
         actions += _soil_switch(snap, soils_by_key, WOODCHIPS_KEY, farms)
 
-    # Prefer the parents of mutations we can ACHIEVE now (all co-parents unlocked);
-    # fall back to any parent-of-a-locked-child, then Baker's wheat, so the board is
-    # never idle and low-tier rolls (incl. Meddleweed on the empty tiles) keep going.
+    # Parents of the focused recipe (the lowest-tier step toward the priority goal).
     parents = _reachable_parents(plants_by_key)
-    if not parents:
-        parents = _relevant_parents(plants_by_key)
-    if not parents:
+    # Bootstrap mode: the focused target is Meddleweed / a Meddleweed-harvest fungus,
+    # which has no adjacency parents — leave the whole board EMPTY so Meddleweed spawns
+    # (it appears only on tiles ringed by empties) and harvest whatever matures.
+    bootstrap = not parents and any(
+        c in BOOTSTRAP_KEYS for _i, c, _p in _focus_recipes(plants_by_key))
+    if not parents and not bootstrap:
+        # Nothing reachable on the recipe tree yet → self-breed Baker's wheat (yields
+        # Thumbcorn/Bakeberry) so the board is never idle.
         bw = plants_by_key.get("bakerWheat")
         parents = [bw] if bw else []
-    if not parents:
+    if not parents and not bootstrap:
         return actions
     for t in tiles:
         x, y, tid = t["x"], t["y"], t["id"]
-        parent_tile = _is_parent_tile(x, y)
+        parent_tile = (not bootstrap) and _is_parent_tile(x, y)
         if tid != 0:
             if t["mature"]:
                 # Use the tile's OWN resolved fields (the snapshot looks the plant
@@ -360,11 +481,10 @@ def _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
                     actions.append({"op": "harvest", "x": x, "y": y})
             continue
         if parent_tile:
-            # Sublattice-checkerboard the two focused parents across the (even,even)
-            # tiles so every interior (odd,odd) empty tile has BOTH species on its
-            # diagonals (mutation counts Moore-8) while its cardinal neighbours stay
-            # empty (contamination is cardinal-only) — max mutation, zero spreading.
-            parent = parents[((x // 2) + (y // 2)) % len(parents)]
+            # Fill the pair: one of each focused parent (or two of the same for a
+            # same-species recipe). Each surrounding empty tile then sees exactly this
+            # pair — the wanted mutation, with no >=2 self-spread polluting the pool.
+            parent = _pair_species(x, parents)
             if budget.take(parent):
                 actions.append({"op": "plant", "x": x, "y": y, "seed": parent["id"]})
     return actions

@@ -24,8 +24,8 @@ _PLANTS = {
     "elderwort": dict(id=7, key="elderwort", name="Elderwort", mature=30,
                       cost=1.0, costM=0.0, children=[]),
     "queenbeet": dict(id=20, key="queenbeet", name="Queenbeet", mature=38,
-                      cost=1.0, costM=0.0, children=["juicyQueenbeet"]),
-    "juicyQueenbeet": dict(id=21, key="juicyQueenbeet", name="Juicy queenbeet",
+                      cost=1.0, costM=0.0, children=["queenbeetLump"]),
+    "queenbeetLump": dict(id=21, key="queenbeetLump", name="Juicy queenbeet",
                            mature=43, cost=1.0, costM=0.0, children=[]),
 }
 # id 0 dirt (req 0), 2 clay (req 100), 4 woodchips (req 300).
@@ -67,41 +67,50 @@ def test_locked_targets_breed_with_woodchips_and_parents():
     acts = garden.decide_actions(snap, "cps", True, **RICH)
     # soil flips to woodchips (id 4)
     assert {"op": "soil", "soil": 4} in acts
-    # parents go ONLY on the (even,even) sublattice (the relevant parent bakerWheat,
-    # id 1) — leaving the other ~3/4 of tiles open for mutations.
+    # parents go ONLY on the isolated-pair tiles (y%3==0, x%3 in {0,1}); single
+    # parent (bakerWheat id 1) → both tiles of each pair are bakerWheat.
     plants = [a for a in acts if a["op"] == "plant"]
-    assert {(a["x"], a["y"]) for a in plants} == {(0, 0), (2, 0), (0, 2), (2, 2)}
+    assert all(garden._is_parent_tile(a["x"], a["y"]) for a in plants)
+    assert {(a["x"], a["y"]) for a in plants} == {
+        (0, 0), (1, 0), (3, 0), (0, 3), (1, 3), (3, 3)}
     assert all(a["seed"] == 1 for a in plants)
 
 
-def test_breed_layout_is_diagonal_no_cardinal_contamination():
-    # Two parents (queenbeet id 20, elderwort id 7 — both list locked children in
-    # the catalog... use bakerWheat's two locked children's parents). Simpler: drive
-    # a 2-parent recipe by unlocking two parents whose locked child needs both.
-    # Here bakerWheat+queenbeet are unlocked and 'juicyQueenbeet' is locked; but to
-    # get a clean 2-parent breed we rely on the catalog's children wiring. Verify the
-    # geometric invariant directly on the placement instead.
-    snap = _snap(["bakerWheat"], _grid(6), soil=4)
-    acts = garden.decide_actions(snap, "cps", True, **RICH)
-    planted = {(a["x"], a["y"]) for a in acts if a["op"] == "plant"}
-    # every planted tile is on the (even,even) sublattice
-    assert all(x % 2 == 0 and y % 2 == 0 for (x, y) in planted)
-    # the prime mutation tiles (odd,odd) are never planted (kept open)
-    assert not any(x % 2 == 1 and y % 2 == 1 for (x, y) in planted)
-    # an interior (odd,odd) tile has parents on its 4 DIAGONALS but none of its 4
-    # cardinal neighbours are planted → mutation (Moore-8) yes, contamination (card-4) no
-    ox, oy = 1, 1
-    diag = {(ox - 1, oy - 1), (ox + 1, oy - 1), (ox - 1, oy + 1), (ox + 1, oy + 1)}
-    card = {(ox, oy - 1), (ox, oy + 1), (ox - 1, oy), (ox + 1, oy)}
-    assert diag <= planted          # parents diagonally adjacent
-    assert not (card & planted)     # no parent cardinally adjacent
+def _moore(placed, x, y, key):
+    return sum(1 for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+               if (dx or dy) and placed.get((x + dx, y + dy)) == key)
+
+
+def test_breed_two_parent_pairs_have_no_self_spread_doubles():
+    # Geometry of a TWO-parent breed: every empty tile sees <=1 of each parent (so the
+    # recipe table's `>=2 same species` self-spread never fires) while still having
+    # cross-mutation sites that see one of each. Verified directly on the placement.
+    parents = [{"id": 1, "key": "A"}, {"id": 2, "key": "B"}]
+    placed = {(x, y): garden._pair_species(x, parents)["key"]
+              for x in range(6) for y in range(6) if garden._is_parent_tile(x, y)}
+    empties = [(x, y) for x in range(6) for y in range(6) if (x, y) not in placed]
+    assert all(_moore(placed, x, y, "A") <= 1 and _moore(placed, x, y, "B") <= 1
+               for (x, y) in empties)                       # no >=2 self-spread anywhere
+    assert any(_moore(placed, x, y, "A") >= 1 and _moore(placed, x, y, "B") >= 1
+               for (x, y) in empties)                       # real cross-mutation sites exist
+
+
+def test_breed_single_parent_pairs_give_double_sites():
+    # A SAME-species recipe (e.g. Thumbcorn from 2 Baker's Wheat) needs an empty tile
+    # to see >=2 of the one parent — the same-species pair (A,A) provides that.
+    parents = [{"id": 1, "key": "A"}]
+    placed = {(x, y): garden._pair_species(x, parents)["key"]
+              for x in range(6) for y in range(6) if garden._is_parent_tile(x, y)}
+    empties = [(x, y) for x in range(6) for y in range(6) if (x, y) not in placed]
+    assert any(_moore(placed, x, y, "A") >= 2 for (x, y) in empties)
 
 
 def test_breed_harvests_mature_mutation_tile():
-    # (1,0) is an odd (mutation) tile holding a mature plant → harvest it.
-    snap = _snap(["bakerWheat"], _grid(2, {(1, 0): (5, 99, True)}))
+    # (0,1) is a non-pair (mutation) tile holding a mature plant → harvest it.
+    assert not garden._is_parent_tile(0, 1)
+    snap = _snap(["bakerWheat"], _grid(2, {(0, 1): (5, 99, True)}))
     acts = garden.decide_actions(snap, "cps", True, **RICH)
-    assert {"op": "harvest", "x": 1, "y": 0} in acts
+    assert {"op": "harvest", "x": 0, "y": 1} in acts
 
 
 def test_steady_fills_empties_and_switches_to_clay():
@@ -138,7 +147,7 @@ def test_steady_harvests_wrong_species():
 
 def test_juicy_harvests_mature_center():
     # 3×3 grid; center (1,1) holds a mature Juicy Queenbeet → harvest the burst.
-    snap = _snap(["bakerWheat", "queenbeet", "juicyQueenbeet"],
+    snap = _snap(["bakerWheat", "queenbeet", "queenbeetLump"],
                  _grid(3, {(1, 1): (21, 50, True)}), soil=0)
     acts = garden.decide_actions(snap, "juicy", True, **RICH)
     assert {"op": "harvest", "x": 1, "y": 1} in acts

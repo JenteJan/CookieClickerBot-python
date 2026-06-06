@@ -982,10 +982,13 @@ class CookieBot:
         # planner working within minutes rather than trusting it over days.
         if len(unlocked) < nplants:
             plan = garden.breeding_plan(snap)
+            goal = plan.get("goal")
             if plan["targets"]:
                 shown = ", ".join(plan["targets"][:3]) + (
                     "…" if len(plan["targets"]) > 3 else "")
                 summary += f" · breeding → {shown}"
+                if goal and goal not in plan["targets"]:
+                    summary += f" (→{goal})"
                 if plan["queued"]:
                     summary += f" (+{plan['queued']} queued)"
             elif plan["packed"]:
@@ -993,8 +996,9 @@ class CookieBot:
             if plan["targets"] != self._garden_plan:
                 self._garden_plan = plan["targets"]
                 if plan["targets"]:
-                    log.info("garden: breeding toward %s via %s%s",
+                    log.info("garden: breeding %s via %s — goal %s%s",
                              ", ".join(plan["targets"]), ", ".join(plan["parents"]),
+                             goal or "?",
                              f" (+{plan['queued']} recipes queued)" if plan["queued"] else "")
                 elif plan["packed"]:
                     log.info("garden: packing 3x3 rings to roll %s", plan["packed"])
