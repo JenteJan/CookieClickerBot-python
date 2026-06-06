@@ -1261,12 +1261,14 @@ try {
     d.heavenlyChipsEarned = Game.heavenlyChipsEarned;
     d.prestige = Game.prestige;
     var owned = 0, total = 0, avail = [];
+    if (typeof Game.BuildAscendTree === 'function') Game.BuildAscendTree();  // refresh canBePurchased
     for (var k in Game.Upgrades) {
         var u = Game.Upgrades[k];
         if (u.pool !== 'prestige') continue;
         total++;
         if (u.bought) { owned++; continue; }
-        if (u.unlocked) avail.push({name: u.name, id: u.id, cost: u.basePrice,
+        // canBePurchased (parents bought) is the real gate — NOT u.unlocked.
+        if (u.canBePurchased) avail.push({name: u.name, id: u.id, cost: u.basePrice,
                                     canAfford: Game.heavenlyChips >= u.basePrice});
     }
     d.prestigeUpgrades = {owned: owned, total: total, unlockedUnbought: avail.length};
@@ -1303,13 +1305,21 @@ var prio = {};
 var out = {ok: false, bought: [], failed: '', chips: 0, owned: 0, total: 0, fn: ''};
 if (typeof Game === 'undefined' || typeof Game.heavenlyChips !== 'number') return out;
 out.fn = 'buy';
+// CRITICAL: heavenly upgrades are gated by `canBePurchased` (set by BuildAscendTree
+// from whether the parents are bought), NOT by `unlocked` (which stays 0 for unbought
+// prestige upgrades — filtering on it skipped EVERY candidate and bought nothing).
+// Refresh the tree first so canBePurchased is current off the ascension screen; each
+// buy() then calls BuildAscendTree(this) to open the next tier.
+if (typeof Game.BuildAscendTree === 'function') Game.BuildAscendTree();
+out.eligible = 0;
 var guard = 0;
 while (guard++ < 500) {
     var best = null, bestPrio = null;
     for (var k in Game.Upgrades) {
         var u = Game.Upgrades[k];
-        if (u.pool !== 'prestige' || u.bought || !u.unlocked || deny[u.name]) continue;
+        if (u.pool !== 'prestige' || u.bought || !u.canBePurchased || deny[u.name]) continue;
         var price = (typeof u.getPrice === 'function') ? u.getPrice() : u.basePrice;
+        if (guard === 1) out.eligible++;        // count buyable-but-maybe-unaffordable once
         if (Game.heavenlyChips < price) continue;
         if (best === null || price < best._price) { best = u; best._price = price; }
         // Priority upgrades (e.g. lump ripe-reducers) are bought before anything else
@@ -1320,11 +1330,10 @@ while (guard++ < 500) {
     }
     best = bestPrio || best;
     if (!best) break;
-    // Buy via the upgrade's OWN buy() — the prestige branch spends heavenly chips,
-    // needs NO ascension screen, and calls BuildAscendTree to unlock the next tier
-    // so cheapest-first walks the whole tree. (Game.PurchaseHeavenlyUpgrade expects
-    // an ID, not the object — passing the object threw and bought nothing.)
-    try { best.buy(); } catch (e) { out.failed = best.name + ': ' + e; break; }
+    // Buy via the upgrade's OWN buy() (bypass=1 skips the clickFunction cancel path).
+    // The prestige branch spends heavenly chips, needs NO ascension screen, and calls
+    // BuildAscendTree to open the next tier so cheapest-first walks the whole tree.
+    try { best.buy(1); } catch (e) { out.failed = best.name + ': ' + e; break; }
     if (best.bought) out.bought.push(best.name);
     else { out.failed = best.name; break; }   // buy didn't take — stop, report
 }

@@ -72,6 +72,22 @@ LUMP_PANTHEON = ["order", "mother", "labor"]      # Rigidel in the −1h slot
 LUMP_HEAVENLY_PRIORITY = ["Stevia Caelestis", "Sugar aging process",
                           "Sucralosia Inutilis", "Diabetica Daemonicus", "Ichor syrup"]
 
+# Value-ordered heavenly buy priority (bought before plain cheapest-first, which would
+# otherwise let niche cheap upgrades — Lucky digit/number — jump ahead of high-value
+# pricier ones on chip-limited ascensions). The prestige-CpS chain is the dominant
+# multiplier (90% of the prestige bonus) and self-gates in order; then the global
+# "everything cheaper" Divine line; then the enablers the bot actively uses; then idle
+# insurance. Names not present in a given save are harmlessly ignored.
+HEAVENLY_PRIORITY = [
+    "Heavenly chip secret", "Heavenly cookie stand", "Heavenly bakery",
+    "Heavenly confectionery", "Heavenly key",                       # 90% prestige CpS
+    "Divine discount", "Divine sales", "Divine bakeries",           # cheaper buildings/upgrades
+    "How to bake your dragon", "Season switcher",                   # dragon auras + seasons
+    "Permanent upgrade slot I", "Permanent upgrade slot II", "Permanent upgrade slot III",
+    "Permanent upgrade slot IV", "Permanent upgrade slot V",        # carry upgrades across resets
+    "Twin Gates of Transcendence", "Persistent memory",            # offline income (if bot stopped)
+]
+
 
 @dataclass
 class _Task:
@@ -686,13 +702,19 @@ class CookieBot:
             log.info("bulk buy %d items, spent %.2e (cps=%.2f)", len(bought), spent, cookies_ps)
             self._status.update(last_action=f"bulk ×{n or len(bought)}")
 
+        golden_bought = False
         for kind, name, price, score in bought:
-            if kind == "upgrade":
-                if name in GOLDEN_COOKIE_UPGRADE_NAMES:
-                    self.golden_count += 1
-                    self._status.update(golden_count=self.golden_count)
+            if kind == "upgrade" and name in GOLDEN_COOKIE_UPGRADE_NAMES:
+                golden_bought = True
             if self._trial is not None:
                 self._trial.buy(kind, name, price, score)
+        # Re-read the TRUE count from the game (authoritative) rather than blindly
+        # incrementing — a +=1 per "bought" entry drifted above the real max (panel
+        # showed 5/3), and since the Lucky reserve gates on `golden_count == 3`, an
+        # over-count silently disabled it. Only fires when a golden upgrade was in the
+        # batch (≤3×/run), so it's cheap.
+        if golden_bought:
+            self._resync_golden_count()
         return len(bought)
 
     def _update_next_buys(
@@ -1244,7 +1266,9 @@ class CookieBot:
         return self.cfg.lump_mode_aura_combo if self.cfg.lump_mode else self.cfg.dragon_aura_combo
 
     def _heavenly_priority(self) -> list:
-        return LUMP_HEAVENLY_PRIORITY if self.cfg.lump_mode else []
+        # Always front-load the dominant heavenly upgrades; in lump mode the ripe-
+        # reducers ride along too (still cheapest-first within the priority set).
+        return (LUMP_HEAVENLY_PRIORITY + HEAVENLY_PRIORITY) if self.cfg.lump_mode else HEAVENLY_PRIORITY
 
     def backup_tick(self) -> None:
         backups_dir = profile_backups_dir(self.cfg.save_profile)
