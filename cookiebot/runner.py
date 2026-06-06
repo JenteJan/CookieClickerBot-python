@@ -62,6 +62,16 @@ log = logging.getLogger("cookiebot")
 # A lone click buff isn't mega — it still shows as a normal CLICK BUFF line.
 MEGA_COMBO_MULT = 50.0       # ×CpS at/above which a combo is "mega" on its own
 
+# Sugar-lump mode targets (Config.lump_mode). Pantheon gods resolved by key in
+# SET_PANTHEON. Lump mode puts Rigidel (Spirit of Order, −1h ripe) in the strongest
+# slot; the default keeps the Godzamok combo setup. The heavenly priority lists the
+# RIPE-reducing lump upgrades (Diabetica/Ichor only cut MATURE age, which the harvest-
+# at-ripe strategy ignores — but they're cheap and on the path, so still listed last).
+COMBO_PANTHEON = ["ruin", "labor", "mother"]      # Godzamok / Muridal / Mokalsium
+LUMP_PANTHEON = ["order", "mother", "labor"]      # Rigidel in the −1h slot
+LUMP_HEAVENLY_PRIORITY = ["Stevia Caelestis", "Sugar aging process",
+                          "Sucralosia Inutilis", "Diabetica Daemonicus", "Ichor syrup"]
+
 
 @dataclass
 class _Task:
@@ -208,7 +218,7 @@ class CookieBot:
             wrinkler_strategy=self.cfg.wrinkler_strategy,
             last_action="setup complete",
         )
-        self.driver.execute_script(scripts.SET_PANTHEON)
+        self.driver.execute_script(scripts.SET_PANTHEON, self._pantheon_gods())
         self._refresh_achievement_count()
         if self.cfg.auto_fire_safe_achievements:
             self._fire_achievements(achievements.SAFE)
@@ -221,6 +231,11 @@ class CookieBot:
             log.info("dynamic golden-cookie reserve on")
         log.info("setup complete; %d golden cookie upgrades owned, %d achievements",
                  self.golden_count, self._status.achievements_owned)
+        if self.cfg.lump_mode:
+            log.info("[bold cyan]SUGAR-LUMP MODE on[/] — aura → %s, pantheon → Rigidel (Spirit of "
+                     "Order), prioritising ripe-reducing heavenly upgrades. Combo CpS is reduced "
+                     "while this is on; lumps are real-time gated so expect ~20-25%% faster, not instant.",
+                     self.cfg.lump_mode_aura_combo)
         # START-of-ascension marker: how many cookies the current run has already
         # baked (0 right after a reset; the resumed total when continuing a save).
         try:
@@ -931,7 +946,7 @@ class CookieBot:
             self.driver.execute_script(scripts.BUY_PLEDGE)
         self.garden_tick()
         self.driver.execute_script(scripts.CHECK_STOCK_MARKET)
-        self.driver.execute_script(scripts.SET_PANTHEON)
+        self.driver.execute_script(scripts.SET_PANTHEON, self._pantheon_gods())
         self._wrinkler_tick()
 
     def _wrinkler_tick(self) -> None:
@@ -1196,6 +1211,16 @@ class CookieBot:
         )
         self._golden_timing = t
 
+    # ---- sugar-lump mode: swap auras / pantheon / heavenly priority -----------
+    def _pantheon_gods(self) -> list:
+        return LUMP_PANTHEON if self.cfg.lump_mode else COMBO_PANTHEON
+
+    def _aura_combo(self) -> str:
+        return self.cfg.lump_mode_aura_combo if self.cfg.lump_mode else self.cfg.dragon_aura_combo
+
+    def _heavenly_priority(self) -> list:
+        return LUMP_HEAVENLY_PRIORITY if self.cfg.lump_mode else []
+
     def backup_tick(self) -> None:
         backups_dir = profile_backups_dir(self.cfg.save_profile)
         path = write_backup(self.driver, backups_dir, self.cfg.backup_retention_days)
@@ -1229,7 +1254,7 @@ class CookieBot:
                 log.info("dragon at an aura-training level; choose an aura manually to continue")
                 self._dragon_aura_logged = True
         if self.cfg.auto_dragon_auras:
-            prefs = [s.strip() for s in self.cfg.dragon_aura_combo.split(",") if s.strip()]
+            prefs = [s.strip() for s in self._aura_combo().split(",") if s.strip()]
             if prefs:
                 res = self.driver.execute_script(scripts.SET_DRAGON_AURAS, prefs) or {}
                 if res.get("dragonLevel") is not None:
@@ -1349,7 +1374,8 @@ class CookieBot:
         pure upside. Self-verifying: if a buy doesn't take, it reports instead of
         spinning (tells us whether the call needs the ascend screen)."""
         try:
-            res = self.driver.execute_script(scripts.BUY_HEAVENLY_UPGRADES) or {}
+            res = self.driver.execute_script(
+                scripts.BUY_HEAVENLY_UPGRADES, [], self._heavenly_priority()) or {}
         except Exception:
             log.exception("heavenly buy failed")
             return

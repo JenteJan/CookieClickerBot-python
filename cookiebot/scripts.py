@@ -728,7 +728,16 @@ SET_PANTHEON = """
 var temple = Game.ObjectsById[6];
 var M = temple && temple.minigame;
 if (!M || temple.level == 0 || !M.slot) return;
-var want = [2, 6, 8];  // [Diamond, Ruby, Jade] = Godzamok, Muridal, Mokalsium
+// arguments[0] = ordered god KEYS for [Diamond, Ruby, Jade]; default = combo setup
+// (Godzamok/Muridal/Mokalsium). Lump mode passes ['order','mother','labor'] to put
+// Rigidel (Spirit of Order, -1h lump ripe) in the strongest slot. Resolved by key so
+// we never hard-code ids.
+var keys = arguments[0] || ['ruin', 'labor', 'mother'];
+var want = [];
+for (var ki = 0; ki < 3; ki++) {
+    var g = M.gods ? M.gods[keys[ki]] : null;
+    want.push(g ? g.id : -1);
+}
 function l(id){ return document.getElementById(id); }
 
 function realSlot(godId, slot) {
@@ -1269,19 +1278,27 @@ return d;
 BUY_HEAVENLY_UPGRADES = """
 var deny = {};
 (arguments[0] || []).forEach(function(n){ deny[n] = 1; });
+var prio = {};
+(arguments[1] || []).forEach(function(n){ prio[n] = 1; });
 var out = {ok: false, bought: [], failed: '', chips: 0, owned: 0, total: 0, fn: ''};
 if (typeof Game === 'undefined' || typeof Game.heavenlyChips !== 'number') return out;
 out.fn = 'buy';
 var guard = 0;
 while (guard++ < 500) {
-    var best = null;
+    var best = null, bestPrio = null;
     for (var k in Game.Upgrades) {
         var u = Game.Upgrades[k];
         if (u.pool !== 'prestige' || u.bought || !u.unlocked || deny[u.name]) continue;
         var price = (typeof u.getPrice === 'function') ? u.getPrice() : u.basePrice;
         if (Game.heavenlyChips < price) continue;
         if (best === null || price < best._price) { best = u; best._price = price; }
+        // Priority upgrades (e.g. lump ripe-reducers) are bought before anything else
+        // that's affordable this tick, so scarce chips reach them first.
+        if (prio[u.name] && (bestPrio === null || price < bestPrio._price)) {
+            bestPrio = u; bestPrio._price = price;
+        }
     }
+    best = bestPrio || best;
     if (!best) break;
     // Buy via the upgrade's OWN buy() — the prestige branch spends heavenly chips,
     // needs NO ascension screen, and calls BuildAscendTree to unlock the next tier

@@ -140,6 +140,8 @@ PROFILE_FIELDS = (
     "auto_garden",
     "garden_strategy",
     "garden_breed_soil",
+    "lump_mode",
+    "lump_mode_aura_combo",
 )
 
 # The strategy variables worth A/B-testing, with their type, for the test menu.
@@ -378,3 +380,16 @@ class Config:
     # During the breeding phase, switch soil to Wood chips (favors mutations).
     # Respects the 10-min soil cooldown. Off keeps soil on dirt (slower unlocks).
     garden_breed_soil: bool = True
+    # Sugar-lump farming mode. Lumps ripen on a ~20-23h real-time clock that cookie
+    # production can't speed; the only levers are the ones that shave the RIPE timer.
+    # When ON the bot reorients toward them: equips the Dragon's Curve aura (~5% faster
+    # + 2x unusual-lump chance), slots Rigidel/Spirit of Order in the pantheon (-1h
+    # ripe while buildings-owned is a multiple of 10), and prioritises the ripe-
+    # reducing heavenly upgrades. This SACRIFICES the combo auras/pantheon (lower CpS),
+    # so only turn it on while you specifically want to grind lumps. Harvest-at-ripe
+    # runs in every mode regardless (it's always optimal). ~20-25% faster + more
+    # unusual lumps is the realistic ceiling (Glucose-charged air is a cheat upgrade).
+    lump_mode: bool = False
+    # Aura combo used while lump_mode is on (Dragon's Curve carries the lump effect;
+    # the second slot keeps a harmless general boost). Comma-separated, slot order.
+    lump_mode_aura_combo: str = "Dragon's Curve,Radiant Appetite"

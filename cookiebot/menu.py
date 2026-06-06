@@ -238,6 +238,10 @@ def _settings_entries() -> list:
              "Garden goal (discover = unlock every plant; cps/golden/juicy = breed one pair then farm)",
              choices=["discover", "cps", "golden", "juicy"], default=c.garden_strategy))),
         _bool_entry("Garden: breed soil (Wood chips)", "garden_breed_soil", "Use Wood chips soil while breeding? (faster mutations)"),
+        _bool_entry("Sugar-lump farming mode", "lump_mode",
+                    "Reorient toward sugar lumps? Equips Dragon's Curve aura + Rigidel pantheon + prioritises "
+                    "ripe-reducing heavenly upgrades. ~20-25% faster + more unusual lumps, but SACRIFICES combo "
+                    "auras/pantheon (lower CpS). Only while grinding lumps"),
     ]
 
 
