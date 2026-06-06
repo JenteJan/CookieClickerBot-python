@@ -69,12 +69,43 @@ def _breeding_active(strategy: str, plants_by_key: dict) -> bool:
     return False
 
 
-def _relevant_parents(plants_by_key: dict) -> list[dict]:
-    """Unlocked plants that are a parent of at least one still-locked plant.
+def _reachable_parents(plants_by_key: dict) -> list[dict]:
+    """The parent species needed for mutations we can ACHIEVE right now.
 
-    A plant's ``children`` lists the species it can mutate into, so an unlocked
-    plant with any locked child is worth growing. Sorted by id (low tier first)
-    for deterministic placement."""
+    A plant's ``children`` lists what it mutates into, so reverse it into
+    ``parents_of[child] = {species that list child}`` — the game's own recipe data
+    (correct keys, no hardcoding). A locked child is REACHABLE only when EVERY one
+    of its parents is already unlocked; we then plant exactly those parents so the
+    required pair/set is present and (on the checkerboard) adjacent to the empty
+    mutation tiles. This is what lets discovery climb the whole tree instead of
+    wasting tiles on a parent whose co-parent we don't have yet. Sorted by id (low
+    tier first) for deterministic, diverse placement.
+
+    Note: the Meddleweed→fungi (Brown Mold / Crumbspore) entry is HARVEST-based,
+    not adjacency, so it isn't in this map — it's covered separately by leaving
+    empty tiles (where Meddleweed spawns) and harvesting every mature mutant."""
+    parents_of: dict[str, set] = {}
+    for p in plants_by_key.values():
+        for c in p["children"]:
+            parents_of.setdefault(c, set()).add(p["key"])
+    unlocked = {k for k, p in plants_by_key.items() if p["unlocked"]}
+    useful: set = set()
+    for child_key, par in parents_of.items():
+        if child_key in _PACKED_TARGET_KEYS:
+            continue                      # packed recipes can't roll on the checkerboard
+        cp = plants_by_key.get(child_key)
+        if cp is None or cp["unlocked"] or not par:
+            continue                      # only still-locked children with a recipe
+        if par <= unlocked:               # every parent available → achievable now
+            useful |= par
+    return sorted((plants_by_key[k] for k in useful if k in plants_by_key),
+                  key=lambda p: p["id"])
+
+
+def _relevant_parents(plants_by_key: dict) -> list[dict]:
+    """Fallback: any unlocked plant that is a parent of at least one still-locked
+    plant (even if a co-parent is missing). Used only when no fully-reachable
+    mutation exists, to keep low-tier rolls going. Sorted by id."""
     out = []
     for p in plants_by_key.values():
         if not p["unlocked"]:
@@ -83,6 +114,71 @@ def _relevant_parents(plants_by_key: dict) -> list[dict]:
             out.append(p)
     out.sort(key=lambda p: p["id"])
     return out
+
+
+# Recipes that need a PACKED 3x3 neighbourhood (the game counts all 8 Moore
+# neighbours), which the breeding checkerboard can never satisfy. Each is grown
+# with a ring layout: empty centres surrounded by 8 ring-species tiles.
+#   Juicy Queenbeet: needs 8 mature Queenbeet around the centre.
+#   Everdaisy:       needs >=3 Tidygrass AND >=3 Elderwort around the centre — a
+#                    2-species ring alternates to put 4 of each around each centre.
+_PACKED_RECIPES = [
+    ("juicyQueenbeet", ["queenbeet"]),
+    ("everdaisy", ["tidygrass", "elderwort"]),
+]
+_PACKED_TARGET_KEYS = {t for t, _ in _PACKED_RECIPES}
+
+
+def _is_center(x: int, y: int) -> bool:
+    """Centre tiles of the 3x3 packing (kept empty for the mutation to land)."""
+    return x % 3 == 1 and y % 3 == 1
+
+
+def _packed_target(plants_by_key: dict, tiles: list[dict]):
+    """Return (target_key, ring_species) for a packed recipe that is reachable now
+    (target locked, every ring species unlocked) AND the plot has at least one
+    interior centre — a (x%3==1, y%3==1) tile whose full 8-neighbour ring is
+    unlocked. Otherwise None (plot too small / nothing to pack → checkerboard)."""
+    coords = {(t["x"], t["y"]) for t in tiles}
+    has_center = any(
+        _is_center(x, y) and all(
+            (x + dx, y + dy) in coords
+            for dx in (-1, 0, 1) for dy in (-1, 0, 1) if dx or dy)
+        for (x, y) in coords)
+    if not has_center:
+        return None
+    for target, ring in _PACKED_RECIPES:
+        tp = plants_by_key.get(target)
+        if tp is None or tp["unlocked"]:
+            continue
+        if all(plants_by_key.get(s, {}).get("unlocked") for s in ring):
+            return target, ring
+    return None
+
+
+def _packed_breed(snap, tiles, plants_by_key, soils_by_key, ring,
+                  breed_soil, farms, budget) -> list[dict]:
+    """Ring layout for an 8-neighbour recipe: keep the 3x3 centres EMPTY (the
+    mutation lands there) and fill every other tile with a ring species so each
+    centre is surrounded by 8 mature parents. Harvest matured centres (captures
+    the new plant / clears weeds) and replace wrong-species ring tiles."""
+    actions: list[dict] = []
+    if breed_soil:
+        actions += _soil_switch(snap, soils_by_key, WOODCHIPS_KEY, farms)
+    for t in tiles:
+        x, y, tid = t["x"], t["y"], t["id"]
+        if _is_center(x, y):
+            if tid != 0 and t["mature"]:            # mutation/weed matured here → grab it
+                actions.append({"op": "harvest", "x": x, "y": y})
+            continue
+        want = ring[(x + y) % len(ring)]             # alternate the ring species
+        wp = plants_by_key.get(want)
+        if tid == 0:
+            if wp and budget.take(wp):
+                actions.append({"op": "plant", "x": x, "y": y, "seed": wp["id"]})
+        elif t.get("key") != want and t["mature"]:   # wrong species → swap it out
+            actions.append({"op": "harvest", "x": x, "y": y})
+    return actions
 
 
 def _seed_cost(plant: dict, cookies_ps: float) -> float:
@@ -142,6 +238,16 @@ def decide_actions(
     budget = _Budget(cookies, cookies_ps, reserve_cookies)
 
     if _breeding_active(strategy, plants_by_key):
+        # The checkerboard can breed every CARDINAL/2-parent recipe, but NOT the
+        # 8-neighbour "packed" ones (Juicy Queenbeet needs 8 mature queenbeet,
+        # Everdaisy needs 3 tidygrass + 3 elderwort around an empty centre). Switch
+        # to a packed ring layout for those — but only once normal breeding has
+        # nothing left to climb (so the cheap recipes finish first) and the plot is
+        # big enough to have a full 3x3 (an interior centre with all 8 neighbours).
+        packed = _packed_target(plants_by_key, tiles)
+        if packed and not _reachable_parents(plants_by_key):
+            return _packed_breed(snap, tiles, plants_by_key, soils_by_key,
+                                 packed[1], breed_soil, farms, budget)
         return _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
                       breed_soil, farms, budget)
     return _steady(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
@@ -154,8 +260,13 @@ def _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
     if breed_soil:
         actions += _soil_switch(snap, soils_by_key, WOODCHIPS_KEY, farms)
 
-    parents = _relevant_parents(plants_by_key)
-    if not parents:  # nothing reachable right now — keep low-tier rolls going
+    # Prefer the parents of mutations we can ACHIEVE now (all co-parents unlocked);
+    # fall back to any parent-of-a-locked-child, then Baker's wheat, so the board is
+    # never idle and low-tier rolls (incl. Meddleweed on the empty tiles) keep going.
+    parents = _reachable_parents(plants_by_key)
+    if not parents:
+        parents = _relevant_parents(plants_by_key)
+    if not parents:
         bw = plants_by_key.get("bakerWheat")
         parents = [bw] if bw else []
     if not parents:

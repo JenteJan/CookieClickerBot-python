@@ -1199,6 +1199,12 @@ class CookieBot:
     # is 7 store buys (instant); Christmas is instant Santa + RNG reindeer; then the
     # RNG-only seasons, Easter (~20 eggs) last. 'fools' is skipped (no CpS upgrades).
     _SEASON_ORDER = ["valentines", "christmas", "halloween", "easter"]
+    # Once every holiday's drops + Santa are collected there's no new content to
+    # chase, so we stop cycling and settle on ONE season. Christmas is the pick:
+    # its reindeer keep spawning and the shimmer-popper cashes them for cookies
+    # (a big payout when popped during a Frenzy) — a small but free ongoing income
+    # the other seasons don't offer once their drops are done.
+    _ENDGAME_SEASON = "christmas"
 
     def _season_complete(self, season: str, counts: dict, santa_level: int, santa_max: int) -> bool:
         """A season is done when every collectible in its drop array is owned —
@@ -1253,8 +1259,12 @@ class CookieBot:
         incomplete = [s for s in self._SEASON_ORDER if not done(s)]
         target = None
         if not cur or done(cur):
-            # Current season fully collected → move to the next incomplete one.
-            target = incomplete[0] if incomplete else None
+            # Current season fully collected → move to the next incomplete one, or
+            # once every season's content is done settle PERMANENTLY on the endgame
+            # season (Christmas, for its ongoing reindeer income) instead of drifting
+            # back to whatever comes first in the order (the old None left us idling
+            # on the current season, which felt like it kept returning to Halloween).
+            target = incomplete[0] if incomplete else self._ENDGAME_SEASON
         elif (now - self._season_progress_at) > self.cfg.season_max_dwell_s:
             # Stalled on RNG with nothing new dropping → make progress elsewhere.
             others = [s for s in incomplete if s != cur]

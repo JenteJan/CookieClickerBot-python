@@ -446,17 +446,23 @@ return out;
 """
 
 PLANT_CLOVERS = """
-if (Game.ObjectsById[2].minigame && Game.ObjectsById[2].minigame.plantsById[4].unlocked == 1) {
-    for (var i = 0; i < 7; i++) {
-        for (var j = 0; j < 7; j++) {
+var M = Game.ObjectsById[2] && Game.ObjectsById[2].minigame;
+if (M && M.plantsById[4] && M.plantsById[4].unlocked == 1) {
+    // The garden is a 6x6 grid (0..5) and only the CENTERED tiles the current Farm
+    // level has opened are plantable — loop 0..5 and gate on isTileUnlocked so we
+    // never click outside the grid or onto a locked plot (the old 0..6 sweep poked
+    // both, which threw harmlessly but looked like "planting outside the grid").
+    for (var x = 0; x < 6; x++) {
+        for (var y = 0; y < 6; y++) {
             try {
-                if (Game.ObjectsById[2].minigame.getTile(i, j)[0] == 0) {
-                    Game.ObjectsById[2].minigame.seedSelected = 4;
-                    Game.ObjectsById[2].minigame.clickTile(i, j);
+                if (M.isTileUnlocked(x, y) && M.getTile(x, y)[0] == 0) {
+                    M.seedSelected = 4;
+                    M.clickTile(x, y);
                 }
             } catch (error) {}
         }
     }
+    M.seedSelected = -1;
 }
 """
 
@@ -560,7 +566,7 @@ for (var i = 0; i < acts.length; i++) {
         } else if (a.op === 'harvest') {
             var tt = M.getTile(a.x, a.y);
             if (tt[0] !== 0) {
-                var hp = M.plantsById[tt[0]];
+                var hp = M.plantsById[tt[0] - 1];   // tile stores id+1 (same as M.harvest)
                 var wasUnlocked = hp ? !!hp.unlocked : true;
                 var hage = tt[1], hmat = hp ? hp.mature : 0;
                 M.harvest(a.x, a.y);
