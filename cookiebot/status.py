@@ -11,22 +11,42 @@ from rich.table import Table
 from rich.text import Text
 
 
-_SUFFIXES: list[tuple[float, str]] = [
-    (1e3, "K"), (1e6, "M"), (1e9, "B"), (1e12, "T"),
-    (1e15, "Qa"), (1e18, "Qi"), (1e21, "Sx"), (1e24, "Sp"),
-    (1e27, "Oc"), (1e30, "No"), (1e33, "Dc"),
-]
+def _build_short_suffixes() -> list[str]:
+    """Cookie Clicker's own 'short' suffix table (main.js formatShort): index i maps
+    to magnitude 10**(3*(i+1)) — M, B, T, Qa, Qi, Sx, Sp, Oc, No, Dc, then UnD, DoD …
+    up through the prefix×suffix grid. Covers every magnitude the game can reach
+    (~1e300) so huge CpS/cookie values abbreviate instead of printing in full."""
+    short = ["k", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No"]
+    prefixes = ["", "Un", "Do", "Tr", "Qa", "Qi", "Sx", "Sp", "Oc", "No"]
+    suffixes = ["D", "V", "T", "Qa", "Qi", "Sx", "Sp", "O", "N"]
+    for suf in suffixes:
+        for pre in prefixes:
+            short.append(pre + suf)
+    short[10] = "Dc"  # the game overrides ' D' → 'Dc' (decillion)
+    return short
+
+
+_SHORT_SUFFIXES = _build_short_suffixes()
 
 
 def format_number(n: float) -> str:
+    """Abbreviate like Cookie Clicker's short notation: 1.234 M, 56.7 OcD, etc.
+    Numbers under a million print in full; anything past the suffix table (≈1e300)
+    falls back to scientific so it can never print a giant mantissa."""
     if not n:
         return "0"
-    if abs(n) < 1e6:
+    a = abs(n)
+    if a < 1e6:
         return f"{n:,.0f}"
-    for threshold, suffix in reversed(_SUFFIXES):
-        if abs(n) >= threshold:
-            return f"{n / threshold:.3f} {suffix}"
-    return f"{n:.3e}"
+    sign = "-" if n < 0 else ""
+    val = a / 1000.0
+    base = 0
+    while round(val) >= 1000 and base < len(_SHORT_SUFFIXES) - 1:
+        val /= 1000.0
+        base += 1
+    if round(val) >= 1000:  # ran off the end of the (huge) table
+        return f"{sign}{a:.3e}"
+    return f"{sign}{val:.3f} {_SHORT_SUFFIXES[base]}"
 
 
 def format_duration(seconds: float) -> str:

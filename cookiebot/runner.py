@@ -51,10 +51,16 @@ from cookiebot.persistence import (
     write_backup,
     write_save,
 )
-from cookiebot.status import BotStatus, render as render_status
+from cookiebot.status import BotStatus, format_number, render as render_status
 from cookiebot.trial import TrialLogger
 
 log = logging.getLogger("cookiebot")
+
+# A "mega bonus" is a rare, huge golden-cookie stack worth flagging loudly: either a
+# big CpS multiplier, or a CpS combo coinciding with a click buff (Frenzy + Click
+# Frenzy is the classic jackpot the autoclicker cashes). Logged in bright colour.
+# A lone click buff isn't mega — it still shows as a normal CLICK BUFF line.
+MEGA_COMBO_MULT = 50.0       # ×CpS at/above which a combo is "mega" on its own
 
 
 @dataclass
@@ -112,6 +118,7 @@ class CookieBot:
         self.upgrades_by_id: dict[int, Upgrade] = {}
         self.golden_count: int = 0
         self._resync_golden: bool = False  # set after an ascension to re-read count
+        self._ascension_count: int = 0     # auto-ascensions performed this session
         self._sched = Scheduler()
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
@@ -132,6 +139,7 @@ class CookieBot:
         self._combo_nogrimoire_logged = False
         self._click_buff_on = False
         self._cps_combo_on = False
+        self._mega_on = False  # a mega bonus (huge CpS/click stack) is live
         # Detailed per-combo debug log (file).
         self._combo_fh = None
         self._combo_log_active = False
@@ -213,6 +221,14 @@ class CookieBot:
             log.info("dynamic golden-cookie reserve on")
         log.info("setup complete; %d golden cookie upgrades owned, %d achievements",
                  self.golden_count, self._status.achievements_owned)
+        # START-of-ascension marker: how many cookies the current run has already
+        # baked (0 right after a reset; the resumed total when continuing a save).
+        try:
+            baked = float(self.driver.execute_script(scripts.COOKIES_THIS_ASCENSION) or 0.0)
+            log.info("[bold magenta]current ascension:[/] baked [bold]%s[/] cookies so far",
+                     format_number(baked))
+        except Exception:
+            pass
         try:
             if self.driver.execute_script(scripts.CLEAR_STUCK_SPECIAL_MENU):
                 log.info("cleared a stuck dragon/Santa popup left open from a prior run")
@@ -759,27 +775,43 @@ class CookieBot:
             click_mult=click_mult,
             click_buffs=click_buffs,
         )
-        # Log a CpS combo when it lands (mult jumps), naming the buffs — so the
+        # A mega bonus = a big CpS stack, or a CpS combo riding alongside a click buff
+        # (Frenzy + Click Frenzy is the jackpot). Flag it LOUDLY in bright colour and
+        # spell out every golden-cookie effect that's active, so the rare huge windows
+        # (the ones that drive an ascension) are unmistakable in the log.
+        is_mega = mult >= MEGA_COMBO_MULT or (mult >= 2.0 and click_mult > 1.0)
+        if is_mega and not self._mega_on:
+            self._mega_on = True
+            effects = ", ".join(cps_buffs + [b for b in click_buffs if b not in cps_buffs]) or "buffs"
+            log.info("[bold black on yellow] ★ MEGA BONUS ★ [/] "
+                     "[bold yellow]×%.0f CpS · ×%.0f click[/] — golden effects: [bold]%s[/]",
+                     mult, click_mult, effects)
+        elif self._mega_on and mult < 1.5 and click_mult <= 1.0:
+            self._mega_on = False
+        # Log a normal CpS combo when it lands (mult jumps), naming the buffs — so the
         # building-special / Dragon-Harvest boosts are visible, and it doubles as
-        # proof the golden-cookie combo engine is actually firing.
+        # proof the golden-cookie combo engine is actually firing. (Skip if it's
+        # already been announced as a mega bonus above.)
         if mult >= 2.0 and not self._cps_combo_on:
             self._cps_combo_on = True
-            log.info("COMBO ACTIVE: ×%.0f CpS — %s", mult, ", ".join(cps_buffs) or "buffs")
+            if not is_mega:
+                log.info("[green]COMBO ACTIVE: ×%.0f CpS[/] — %s", mult, ", ".join(cps_buffs) or "buffs")
         elif mult < 1.5:
             self._cps_combo_on = False
         # Log a click buff (Dragonflight / Click frenzy) when it appears — the
         # autoclicker is cashing in on it even though it's not a CpS multiplier.
         if click_mult > 1.0 and not self._click_buff_on:
             self._click_buff_on = True
-            log.info("CLICK BUFF: %s (×%.0f click) — autoclicker capitalizing",
-                     ", ".join(click_buffs) or "active", click_mult)
+            if not is_mega:
+                log.info("[cyan]CLICK BUFF: %s (×%.0f click)[/] — autoclicker capitalizing",
+                         ", ".join(click_buffs) or "active", click_mult)
         elif click_mult <= 1.0:
             self._click_buff_on = False
         n, mult = int(res.get("n", 0)), float(res.get("mult", 1.0))
         magic, magic_m = res.get("magic") or 0, res.get("magicM") or 0
         if res.get("cast"):
             kind = "escalate" if n >= 2 else "open"
-            log.info("COMBO: cast FtHoF (%s) on %d-buff ×%.1f stack — magic %.0f/%.0f, %d on screen",
+            log.info("[cyan]COMBO: cast FtHoF (%s) on %d-buff ×%.1f stack[/] — magic %.0f/%.0f, %d on screen",
                      kind, n, mult, magic, magic_m, int(res.get("goldens", 0)))
             self._status.update(last_action=f"FtHoF {kind} ×{mult:.0f}")
             self._combo_warn_at = 0.0
@@ -1375,8 +1407,14 @@ class CookieBot:
             log.info("auto-ascend deferred: golden-cookie effect active — capturing it "
                      "before the reset (more heavenly chips)")
             return
-        log.info("auto-ascend: prestige %.0f → %.0f (+%.0f, %.1f%%)",
-                 prestige, potential, gain, gain_pct)
+        # END-of-ascension marker: how many cookies this run baked before the reset.
+        baked = float(info.get("cookiesThisAscension", 0.0))
+        self._ascension_count += 1
+        log.info("[bold magenta]═══ ASCENSION #%d ═══[/] baked [bold]%s[/] cookies this run "
+                 "→ prestige %s → %s ([bold green]+%s, %.1f%%[/])",
+                 self._ascension_count, format_number(baked),
+                 format_number(prestige), format_number(potential),
+                 format_number(gain), gain_pct)
         # Realise all wrinklers FIRST: their digested cookies count toward the
         # ascension total only once popped, otherwise they're lost on the reset.
         self.driver.execute_script(scripts.POP_WRINKLERS)

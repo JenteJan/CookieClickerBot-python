@@ -1359,9 +1359,15 @@ return {
     prestige: Game.prestige,
     potential: Game.HowMuchPrestige(Game.cookiesReset + Game.cookiesEarned),
     buffed: buffed,
-    shimmers: Game.shimmers ? Game.shimmers.length : 0
+    shimmers: Game.shimmers ? Game.shimmers.length : 0,
+    cookiesThisAscension: Game.cookiesEarned,   // baked since the last reset
+    cookiesAllTime: Game.cookiesReset + Game.cookiesEarned
 };
 """
+
+# Cookies baked SINCE the last ascension (Game.cookiesEarned) — used to log the
+# per-ascension total at run start and right before a reset.
+COOKIES_THIS_ASCENSION = "return Game.cookiesEarned;"
 
 # Force ascension (the 1 arg skips the confirm), then complete the rebirth a
 # moment later once the ascension screen has processed. Heavenly chips persist.
