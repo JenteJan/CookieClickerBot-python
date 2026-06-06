@@ -63,14 +63,38 @@ RICH = dict(cookies=1e12, cookies_ps=1.0)   # affordable (seed cost ≈ 60)
 
 
 def test_locked_targets_breed_with_woodchips_and_parents():
-    snap = _snap(["bakerWheat"], _grid(2), soil=0)
+    snap = _snap(["bakerWheat"], _grid(4), soil=0)
     acts = garden.decide_actions(snap, "cps", True, **RICH)
     # soil flips to woodchips (id 4)
     assert {"op": "soil", "soil": 4} in acts
-    # even tiles (0,0) and (1,1) get the relevant parent (bakerWheat id 1)
+    # parents go ONLY on the (even,even) sublattice (the relevant parent bakerWheat,
+    # id 1) — leaving the other ~3/4 of tiles open for mutations.
     plants = [a for a in acts if a["op"] == "plant"]
-    assert {(a["x"], a["y"]) for a in plants} == {(0, 0), (1, 1)}
+    assert {(a["x"], a["y"]) for a in plants} == {(0, 0), (2, 0), (0, 2), (2, 2)}
     assert all(a["seed"] == 1 for a in plants)
+
+
+def test_breed_layout_is_diagonal_no_cardinal_contamination():
+    # Two parents (queenbeet id 20, elderwort id 7 — both list locked children in
+    # the catalog... use bakerWheat's two locked children's parents). Simpler: drive
+    # a 2-parent recipe by unlocking two parents whose locked child needs both.
+    # Here bakerWheat+queenbeet are unlocked and 'juicyQueenbeet' is locked; but to
+    # get a clean 2-parent breed we rely on the catalog's children wiring. Verify the
+    # geometric invariant directly on the placement instead.
+    snap = _snap(["bakerWheat"], _grid(6), soil=4)
+    acts = garden.decide_actions(snap, "cps", True, **RICH)
+    planted = {(a["x"], a["y"]) for a in acts if a["op"] == "plant"}
+    # every planted tile is on the (even,even) sublattice
+    assert all(x % 2 == 0 and y % 2 == 0 for (x, y) in planted)
+    # the prime mutation tiles (odd,odd) are never planted (kept open)
+    assert not any(x % 2 == 1 and y % 2 == 1 for (x, y) in planted)
+    # an interior (odd,odd) tile has parents on its 4 DIAGONALS but none of its 4
+    # cardinal neighbours are planted → mutation (Moore-8) yes, contamination (card-4) no
+    ox, oy = 1, 1
+    diag = {(ox - 1, oy - 1), (ox + 1, oy - 1), (ox - 1, oy + 1), (ox + 1, oy + 1)}
+    card = {(ox, oy - 1), (ox, oy + 1), (ox - 1, oy), (ox + 1, oy)}
+    assert diag <= planted          # parents diagonally adjacent
+    assert not (card & planted)     # no parent cardinally adjacent
 
 
 def test_breed_harvests_mature_mutation_tile():

@@ -139,6 +139,7 @@ class CookieBot:
         self._combo_log_start_cookies = 0.0
         self._combo_log_peak = 1.0
         self._garden_unlocked = None  # set of unlocked plant keys, for unlock logging
+        self._garden_plan = None      # last breeding target list, for change logging
         self._sell_mode_logged = False
         # Cache of upgrade-id → true marginal CPS, refreshed on a slow tick in
         # payback mode (recomputing it every 50 ms purchase tick is too costly).
@@ -972,10 +973,32 @@ class CookieBot:
         if tiles:
             filled = sum(1 for t in tiles if t.get("id"))
             ripe = sum(1 for t in tiles if t.get("mature"))
-            st.update(garden_summary=f"{len(unlocked)}/{nplants} plants · "
-                                     f"{filled}/{len(tiles)} tiles, {ripe} ripe")
+            summary = (f"{len(unlocked)}/{nplants} plants · "
+                       f"{filled}/{len(tiles)} tiles, {ripe} ripe")
         else:
-            st.update(garden_summary=f"{len(unlocked)}/{nplants} plants unlocked")
+            summary = f"{len(unlocked)}/{nplants} plants unlocked"
+        # Breeding telemetry: name what discovery is actively chasing this round and
+        # how many recipes are queued behind it, so the user can SEE the focused
+        # planner working within minutes rather than trusting it over days.
+        if len(unlocked) < nplants:
+            plan = garden.breeding_plan(snap)
+            if plan["targets"]:
+                shown = ", ".join(plan["targets"][:3]) + (
+                    "…" if len(plan["targets"]) > 3 else "")
+                summary += f" · breeding → {shown}"
+                if plan["queued"]:
+                    summary += f" (+{plan['queued']} queued)"
+            elif plan["packed"]:
+                summary += f" · packing → {plan['packed']}"
+            if plan["targets"] != self._garden_plan:
+                self._garden_plan = plan["targets"]
+                if plan["targets"]:
+                    log.info("garden: breeding toward %s via %s%s",
+                             ", ".join(plan["targets"]), ", ".join(plan["parents"]),
+                             f" (+{plan['queued']} recipes queued)" if plan["queued"] else "")
+                elif plan["packed"]:
+                    log.info("garden: packing 3x3 rings to roll %s", plan["packed"])
+        st.update(garden_summary=summary)
         # First tick after a (re)start: read-only sync. We've now recorded the
         # restored board + refreshed the panel, but we DON'T plant or harvest yet —
         # so we never reap a just-loaded garden before having observed it. Cookie
@@ -1300,6 +1323,19 @@ class CookieBot:
             log.warning("heavenly buy of '%s' didn't take effect — may need the ascend "
                         "screen or a different call; will keep trying", res.get("failed"))
             self._heavenly_warn_logged = True
+        # Fill any unlocked-but-empty permanent upgrade slots (e.g. just after a
+        # 'Permanent upgrade slot' heavenly upgrade was bought above, or on a fresh
+        # save) so the next ascension carries the priciest owned upgrades for free.
+        try:
+            perm = self.driver.execute_script(scripts.ASSIGN_PERMANENT_SLOTS) or {}
+        except Exception:
+            log.exception("permanent-slot assign failed")
+            perm = {}
+        if perm.get("filled"):
+            log.info("permanent slots: assigned %s (%d/%d slots now set)",
+                     ", ".join(perm["filled"]),
+                     sum(1 for x in perm.get("assigned", []) if x >= 0), perm.get("slots", 0))
+            self._status.update(last_action=f"perm slots +{len(perm['filled'])}")
 
     def ascend_tick(self) -> None:
         # Safety net: if a prior reincarnation didn't complete and we're stuck on

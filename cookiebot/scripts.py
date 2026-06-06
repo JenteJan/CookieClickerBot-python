@@ -1299,6 +1299,52 @@ out.ok = true;
 return out;
 """
 
+# Fill any UNLOCKED-but-EMPTY permanent upgrade slots with the most valuable owned
+# upgrades, so a fresh ascension keeps them for free (huge head-start) instead of
+# leaving slots blank. Permanent upgrades persist across resets and are re-granted
+# on reincarnation, so the array IS the mechanism (Game.AssignPermanentUpgrade
+# doesn't exist — confirmed by DIAGNOSE_HEAVENLY). We only fill empty slots — never
+# overwrite an existing pick — so it's idempotent and won't fight a manual choice.
+# "Most valuable" = highest base price among owned production upgrades (price ≈ tier
+# ≈ CpS power; the standard advice is to slot your priciest upgrades). Tech / toggle
+# / prestige / debug / seasonal-pool upgrades are excluded.
+ASSIGN_PERMANENT_SLOTS = """
+var out = {ok: false, slots: 0, filled: [], assigned: []};
+if (typeof Game === 'undefined' || !Game.permanentUpgrades) return out;
+var slotNames = ['Permanent upgrade slot I', 'Permanent upgrade slot II',
+                 'Permanent upgrade slot III', 'Permanent upgrade slot IV',
+                 'Permanent upgrade slot V'];
+var slots = 0;
+for (var i = 0; i < slotNames.length; i++) { if (Game.Has(slotNames[i])) slots++; }
+out.slots = slots;
+var perm = Game.permanentUpgrades;
+var assigned = {};
+for (var i = 0; i < perm.length; i++) { if (perm[i] >= 0) assigned[perm[i]] = 1; }
+var skipPools = {prestige: 1, toggle: 1, tech: 1, debug: 1, unused: 1};
+var cands = [];
+for (var i = 0; i < Game.UpgradesById.length; i++) {
+    var u = Game.UpgradesById[i];
+    if (!u || !u.bought) continue;
+    if (skipPools[u.pool || '']) continue;
+    if (assigned[u.id]) continue;
+    cands.push({id: u.id, price: u.basePrice || 0, name: u.name});
+}
+cands.sort(function (a, b) { return b.price - a.price; });
+var ci = 0;
+for (var s = 0; s < slots && s < perm.length; s++) {
+    if (perm[s] >= 0) continue;                 // keep existing assignment
+    while (ci < cands.length && assigned[cands[ci].id]) ci++;
+    if (ci >= cands.length) break;
+    perm[s] = cands[ci].id;
+    assigned[cands[ci].id] = 1;
+    out.filled.push(cands[ci].name);
+    ci++;
+}
+out.assigned = perm.slice();
+out.ok = true;
+return out;
+"""
+
 ASCEND_INFO = """
 var buffed = false;
 for (var b in Game.buffs) {

@@ -69,17 +69,28 @@ def _breeding_active(strategy: str, plants_by_key: dict) -> bool:
     return False
 
 
-def _reachable_parents(plants_by_key: dict) -> list[dict]:
-    """The parent species needed for mutations we can ACHIEVE right now.
+# Cap on how many distinct parent species the breeding board plants at once. The
+# checkerboard's mutation tiles only roll a recipe when BOTH its parents sit among
+# a tile's 4 neighbours; spreading many species thin drops that per-tile coverage.
+# Measured on a full 6x6 (18 empty tiles): one 2-parent recipe → ALL 18 tiles can
+# roll it; two recipes (4 species) → only ~6/18 each; 5-6 species → ~4/18. So we
+# FOCUS on the single lowest-tier reachable recipe (cap 2 = its two parents), which
+# floods every mutation tile with that pair — maximal roll density, the fastest way
+# to break a discovery stall. Extra recipes sharing those exact parents (e.g. two
+# children of the same pair, or two single-parent recipes) piggyback for free; the
+# rest defer to the next round once this one unlocks and the board advances.
+FOCUS_PARENT_CAP = 2
+
+
+def _reachable_recipes(plants_by_key: dict) -> list[tuple]:
+    """Every mutation we can ACHIEVE right now, as ``(child_id, child_key, parents)``
+    sorted by child id (low tier first).
 
     A plant's ``children`` lists what it mutates into, so reverse it into
     ``parents_of[child] = {species that list child}`` — the game's own recipe data
     (correct keys, no hardcoding). A locked child is REACHABLE only when EVERY one
-    of its parents is already unlocked; we then plant exactly those parents so the
-    required pair/set is present and (on the checkerboard) adjacent to the empty
-    mutation tiles. This is what lets discovery climb the whole tree instead of
-    wasting tiles on a parent whose co-parent we don't have yet. Sorted by id (low
-    tier first) for deterministic, diverse placement.
+    of its parents is already unlocked. Packed (8-neighbour) recipes are excluded —
+    they can't roll on the checkerboard and are handled by ``_packed_breed``.
 
     Note: the Meddleweed→fungi (Brown Mold / Crumbspore) entry is HARVEST-based,
     not adjacency, so it isn't in this map — it's covered separately by leaving
@@ -89,7 +100,7 @@ def _reachable_parents(plants_by_key: dict) -> list[dict]:
         for c in p["children"]:
             parents_of.setdefault(c, set()).add(p["key"])
     unlocked = {k for k, p in plants_by_key.items() if p["unlocked"]}
-    useful: set = set()
+    recipes: list[tuple] = []
     for child_key, par in parents_of.items():
         if child_key in _PACKED_TARGET_KEYS:
             continue                      # packed recipes can't roll on the checkerboard
@@ -97,9 +108,50 @@ def _reachable_parents(plants_by_key: dict) -> list[dict]:
         if cp is None or cp["unlocked"] or not par:
             continue                      # only still-locked children with a recipe
         if par <= unlocked:               # every parent available → achievable now
-            useful |= par
-    return sorted((plants_by_key[k] for k in useful if k in plants_by_key),
+            recipes.append((cp["id"], child_key, frozenset(par)))
+    recipes.sort()
+    return recipes
+
+
+def _focus_parents(recipes: list[tuple]) -> set:
+    """Pick the parent species to actually plant: always the lowest-tier reachable
+    recipe, plus any further recipe that fits without pushing the distinct-parent
+    count past ``FOCUS_PARENT_CAP`` (recipes sharing those parents come along free).
+    Keeps adjacency density high so the focused recipes roll quickly."""
+    chosen: set = set()
+    for _cid, _ck, par in recipes:
+        if not chosen or len(chosen | par) <= FOCUS_PARENT_CAP:
+            chosen |= set(par)
+    return chosen
+
+
+def _reachable_parents(plants_by_key: dict) -> list[dict]:
+    """The focused parent species to plant this round (see ``_focus_parents``),
+    sorted by id (low tier first) for deterministic placement."""
+    chosen = _focus_parents(_reachable_recipes(plants_by_key))
+    return sorted((plants_by_key[k] for k in chosen if k in plants_by_key),
                   key=lambda p: p["id"])
+
+
+def breeding_plan(snap: dict) -> dict:
+    """Telemetry (no side effects): what discovery is actively chasing right now, so
+    a stalled garden is legible from the panel/log instead of needing days to judge.
+    Returns ``{targets, parents, queued, packed}`` — the recipe children being
+    pursued this round, their parent species, how many reachable recipes are
+    deferred to later rounds, and any packed target."""
+    if not snap or not snap.get("unlocked"):
+        return {"targets": [], "parents": [], "queued": 0, "packed": None}
+    plants_by_key, _by_id, _soils = _index(snap)
+    recipes = _reachable_recipes(plants_by_key)
+    chosen = _focus_parents(recipes)
+    targets = [ck for _cid, ck, par in recipes if par <= chosen]
+    packed = _packed_target(plants_by_key, snap.get("tiles", []))
+    return {
+        "targets": targets,
+        "parents": sorted(chosen),
+        "queued": max(0, len(recipes) - len(targets)),
+        "packed": packed[0] if packed else None,
+    }
 
 
 def _relevant_parents(plants_by_key: dict) -> list[dict]:
@@ -132,6 +184,16 @@ _PACKED_TARGET_KEYS = {t for t, _ in _PACKED_RECIPES}
 def _is_center(x: int, y: int) -> bool:
     """Centre tiles of the 3x3 packing (kept empty for the mutation to land)."""
     return x % 3 == 1 and y % 3 == 1
+
+
+def _is_parent_tile(x: int, y: int) -> bool:
+    """Breeding-layout parent tiles: the (even, even) sublattice (a quarter of the
+    grid). Parents sit here so the empty (odd, odd) mutation tiles touch them only
+    DIAGONALLY — which counts for mutations (Moore-8 neighbourhood) but NOT for
+    contamination/spreading (cardinal-4 only). The other ~3/4 of tiles stay empty,
+    giving mutations real room instead of a dense checkerboard the parents spread
+    over before anything can mutate."""
+    return x % 2 == 0 and y % 2 == 0
 
 
 def _packed_target(plants_by_key: dict, tiles: list[dict]):
@@ -271,37 +333,38 @@ def _breed(snap, tiles, plants_by_key, plants_by_id, soils_by_key,
         parents = [bw] if bw else []
     if not parents:
         return actions
-    parent_keys = {p["key"] for p in parents}
-
     for t in tiles:
         x, y, tid = t["x"], t["y"], t["id"]
-        even = (x + y) % 2 == 0
+        parent_tile = _is_parent_tile(x, y)
         if tid != 0:
             if t["mature"]:
                 # Use the tile's OWN resolved fields (the snapshot looks the plant
                 # up at the correct id-1); plants_by_id keyed by the tile's raw id
                 # would be off by one.
                 cur_locked = not t.get("unlocked", True)
-                if even:
+                if parent_tile:
                     # Parent tiles are the mutation ENGINE: a mature plant here
-                    # seeds the adjacent empty mutation tiles every tick it stays
-                    # alive, so LEAVE it growing — it dies of old age on its own and
-                    # the tile is replanted then. Harvesting it the instant it
-                    # matures (the old behaviour) gave it ~zero seeding time and
-                    # stalled all breeding. Only pull a still-LOCKED species that
-                    # happened to spread onto a parent tile, to bank its unlock.
+                    # contributes to the (Moore-8) mutation rolls on the diagonal
+                    # empty tiles every tick it stays alive, so LEAVE it growing — it
+                    # dies of old age on its own and the tile is replanted then. Only
+                    # pull a still-LOCKED species that strayed here, to bank its unlock.
                     harvest = cur_locked
                 else:
-                    # Mutation tiles must stay EMPTY to catch fresh rolls. Harvest
-                    # whatever matured here: a locked species banks its unlock; an
-                    # unlocked one (usually a parent self-spread) is cleared so the
-                    # tile can roll again instead of clogging with a copy.
+                    # Every non-parent tile must stay EMPTY so mutations have room.
+                    # Harvest whatever matured here: a locked species banks its unlock;
+                    # anything else (a parent CONTAMINATION/spread — these land on the
+                    # cardinal buffer tiles) is cleared so the board stays open instead
+                    # of the spreads choking out the mutation sites.
                     harvest = True
                 if harvest:
                     actions.append({"op": "harvest", "x": x, "y": y})
             continue
-        if even:
-            parent = parents[(x + 2 * y) % len(parents)]
+        if parent_tile:
+            # Sublattice-checkerboard the two focused parents across the (even,even)
+            # tiles so every interior (odd,odd) empty tile has BOTH species on its
+            # diagonals (mutation counts Moore-8) while its cardinal neighbours stay
+            # empty (contamination is cardinal-only) — max mutation, zero spreading.
+            parent = parents[((x // 2) + (y // 2)) % len(parents)]
             if budget.take(parent):
                 actions.append({"op": "plant", "x": x, "y": y, "seed": parent["id"]})
     return actions
