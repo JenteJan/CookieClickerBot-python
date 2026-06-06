@@ -129,6 +129,7 @@ class CookieBot:
         self.golden_count: int = 0
         self._resync_golden: bool = False  # set after an ascension to re-read count
         self._ascension_count: int = 0     # auto-ascensions performed this session
+        self._sacrifice_warned: bool = False  # one-time garden-sacrifice misconfig warning
         self._sched = Scheduler()
         self._actions: queue.Queue[Callable[[], None]] = queue.Queue()
         self._quit = False
@@ -1074,6 +1075,30 @@ class CookieBot:
                     for t in occ)
                 log.info("garden DIAG (occupied tiles): %s", desc)
             return
+        # Sugar-lump farming: once EVERY plant is unlocked, sacrificing the garden to
+        # the sugar hornets grants a flat 10 lumps (the wiki's ~3x lump-rate method) —
+        # but it WIPES the seed log back to Baker's wheat. Hard-gated behind an explicit
+        # opt-in; we then re-breed from scratch (discover mode) and sacrifice again each
+        # time the log completes. Skipped on the read-only first tick (handled above).
+        if self.cfg.lump_sacrifice_garden and nplants > 0 and len(unlocked) >= nplants:
+            if self.cfg.garden_strategy != "discover" and not self._sacrifice_warned:
+                self._sacrifice_warned = True
+                log.warning("lump_sacrifice_garden on but garden_strategy is '%s' — after the "
+                            "sacrifice the garden won't re-unlock every plant, so it can only "
+                            "fire once. Set garden_strategy='discover' to cycle it.",
+                            self.cfg.garden_strategy)
+            try:
+                res = self.driver.execute_script(scripts.SACRIFICE_GARDEN) or {}
+            except Exception:
+                log.exception("garden sacrifice failed")
+                res = {}
+            if res.get("sacrificed"):
+                log.info("[bold cyan]GARDEN SACRIFICED[/] — all %d plants unlocked → "
+                         "[bold]+%.0f sugar lumps[/] (seed log reset to Baker's wheat; re-breeding now)",
+                         nplants, float(res.get("gained", 0)))
+                self._status.update(last_action=f"sacrificed garden (+{res.get('gained', 0):.0f} lumps)")
+                self._garden_unlocked = None  # re-observe the wiped log next tick
+                return
         # Seed budget: a small slice of the bank, NOT gated behind the full
         # golden-cookie reserve. Seeds cost only seconds-to-minutes of CpS, but the
         # golden reserve is 6000 s–12 h of CpS — on a save that's perpetually

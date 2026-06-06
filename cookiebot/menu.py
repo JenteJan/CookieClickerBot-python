@@ -242,6 +242,10 @@ def _settings_entries() -> list:
                     "Reorient toward sugar lumps? Equips Dragon's Curve aura + Rigidel pantheon + prioritises "
                     "ripe-reducing heavenly upgrades. ~20-25% faster + more unusual lumps, but SACRIFICES combo "
                     "auras/pantheon (lower CpS). Only while grinding lumps"),
+        _bool_entry("Sacrifice garden for lumps", "lump_sacrifice_garden",
+                    "DESTRUCTIVE: when all 34 plants are unlocked, sacrifice the garden for 10 sugar lumps "
+                    "(wiki's ~3x lump method), WIPING the seed log back to Baker's wheat. Needs auto-garden + "
+                    "'discover' strategy to re-breed and repeat. Irreversible — only for dedicated lump grinding"),
     ]
 
 

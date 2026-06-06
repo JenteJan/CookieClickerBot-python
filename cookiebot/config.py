@@ -142,6 +142,7 @@ PROFILE_FIELDS = (
     "garden_breed_soil",
     "lump_mode",
     "lump_mode_aura_combo",
+    "lump_sacrifice_garden",
 )
 
 # The strategy variables worth A/B-testing, with their type, for the test menu.
@@ -393,3 +394,11 @@ class Config:
     # Aura combo used while lump_mode is on (Dragon's Curve carries the lump effect;
     # the second slot keeps a harmless general boost). Comma-separated, slot order.
     lump_mode_aura_combo: str = "Dragon's Curve,Radiant Appetite"
+    # Sacrifice the garden for sugar lumps. Once ALL 34 plants are unlocked, the game
+    # lets you sacrifice the garden for a flat 10 sugar lumps (the wiki's ~3x lump-rate
+    # method; +1 more if a Juicy Queenbeet is harvested in the process) — but it WIPES
+    # the entire seed log back to Baker's wheat (farm level/grid is kept). DESTRUCTIVE
+    # and irreversible, so it's a separate explicit opt-in, default OFF even in lump
+    # mode. Needs auto_garden + garden_strategy='discover' to then re-breed all 34 and
+    # sacrifice again each cycle. Only enable when you're dedicated to grinding lumps.
+    lump_sacrifice_garden: bool = False

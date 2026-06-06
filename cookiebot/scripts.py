@@ -701,6 +701,26 @@ if (Date.now() - Game.lumpT >= Game.lumpRipeAge) {
 }
 """
 
+# Sacrifice the garden for 10 sugar lumps. The game only allows it once EVERY plant
+# is unlocked (M.plantsUnlockedN >= M.plantsN); M.convert() harvests all (a mature
+# Juicy Queenbeet drops a bonus lump), locks every seed except Baker's wheat, and
+# calls Game.gainLumps(10). DESTRUCTIVE — the Python side gates this behind an
+# explicit opt-in. Returns whether it fired and the lump delta.
+SACRIFICE_GARDEN = """
+var M = Game.ObjectsById[2] && Game.ObjectsById[2].minigame;
+var out = {ok: false, sacrificed: false, unlocked: 0, total: 0, gained: 0};
+if (!M || !M.plantsById || typeof M.convert !== 'function') return out;
+out.unlocked = M.plantsUnlockedN; out.total = M.plantsN;
+if (M.plantsUnlockedN >= M.plantsN) {
+    var before = Game.lumps;
+    M.convert();                       // self-guards on plantsUnlockedN too
+    out.gained = Game.lumps - before;
+    out.sacrificed = out.gained > 0;
+}
+out.ok = true;
+return out;
+"""
+
 BUY_PLEDGE = """
 var pledge = Game.UpgradesById[74];
 if (pledge && pledge.unlocked == 1 && pledge.bought == 0 && Game.cookies >= pledge.basePrice) {
