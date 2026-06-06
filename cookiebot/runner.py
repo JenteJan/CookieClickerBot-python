@@ -1139,10 +1139,13 @@ class CookieBot:
         write_save(self.driver, self.save_file)
         self._refresh_achievement_count()
         # After an ascension, re-read the holding-upgrade count once the rebirth
-        # has settled (handles permanent-upgrade carryover correctly).
+        # has settled (handles permanent-upgrade carryover correctly), and spend the
+        # heavenly-chip windfall NOW (an ascension is exactly when there are chips to
+        # spend; don't wait for the periodic heavenly tick or depend on its flag).
         if self._resync_golden:
             self._resync_golden = False
             self._resync_golden_count()
+            self.heavenly_tick()
         # Refresh golden-cookie spawn timing for the dynamic reserve. Changes
         # slowly (only when frequency upgrades are bought), so 30s is plenty.
         if self.cfg.dynamic_golden_reserve:
@@ -1313,7 +1316,11 @@ class CookieBot:
         Unspent chips do nothing and heavenly upgrades are permanent, so this is
         pure upside. Self-verifying: if a buy doesn't take, it reports instead of
         spinning (tells us whether the call needs the ascend screen)."""
-        res = self.driver.execute_script(scripts.BUY_HEAVENLY_UPGRADES) or {}
+        try:
+            res = self.driver.execute_script(scripts.BUY_HEAVENLY_UPGRADES) or {}
+        except Exception:
+            log.exception("heavenly buy failed")
+            return
         self._status.update(heavenly_chips=float(res.get("chips", 0.0)),
                             heavenly_owned=int(res.get("owned", 0)),
                             heavenly_total=int(res.get("total", 0)))

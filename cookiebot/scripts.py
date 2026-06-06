@@ -1271,19 +1271,23 @@ var deny = {};
 (arguments[0] || []).forEach(function(n){ deny[n] = 1; });
 var out = {ok: false, bought: [], failed: '', chips: 0, owned: 0, total: 0, fn: ''};
 if (typeof Game === 'undefined' || typeof Game.heavenlyChips !== 'number') return out;
-var hasFn = typeof Game.PurchaseHeavenlyUpgrade === 'function';
-out.fn = hasFn ? 'PurchaseHeavenlyUpgrade' : 'buy';
+out.fn = 'buy';
 var guard = 0;
-while (guard++ < 300) {
+while (guard++ < 500) {
     var best = null;
     for (var k in Game.Upgrades) {
         var u = Game.Upgrades[k];
         if (u.pool !== 'prestige' || u.bought || !u.unlocked || deny[u.name]) continue;
-        if (Game.heavenlyChips < u.basePrice) continue;
-        if (best === null || u.basePrice < best.basePrice) best = u;
+        var price = (typeof u.getPrice === 'function') ? u.getPrice() : u.basePrice;
+        if (Game.heavenlyChips < price) continue;
+        if (best === null || price < best._price) { best = u; best._price = price; }
     }
     if (!best) break;
-    if (hasFn) Game.PurchaseHeavenlyUpgrade(best); else if (best.buy) best.buy();
+    // Buy via the upgrade's OWN buy() — the prestige branch spends heavenly chips,
+    // needs NO ascension screen, and calls BuildAscendTree to unlock the next tier
+    // so cheapest-first walks the whole tree. (Game.PurchaseHeavenlyUpgrade expects
+    // an ID, not the object — passing the object threw and bought nothing.)
+    try { best.buy(); } catch (e) { out.failed = best.name + ': ' + e; break; }
     if (best.bought) out.bought.push(best.name);
     else { out.failed = best.name; break; }   // buy didn't take — stop, report
 }
